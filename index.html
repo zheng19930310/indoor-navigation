@@ -1,0 +1,988 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no,viewport-fit=cover">
+<meta name="theme-color" content="#0e1116">
+<title>室内导航 · 1F-3F</title>
+<style>
+:root{
+  --bg:#0e1116;--panel:#161c25;--panel2:#212a36;--line:#2c3644;
+  --txt:#e8edf4;--dim:#8e99aa;--accent:#4d8dff;--a:#ff4d4f;--b:#2fd07a;
+}
+*{box-sizing:border-box;-webkit-tap-highlight-color:transparent}
+html,body{margin:0;height:100%;overflow:hidden;background:var(--bg);color:var(--txt);
+  font:14px/1.5 -apple-system,BlinkMacSystemFont,"PingFang SC","Microsoft YaHei",Roboto,sans-serif;
+  user-select:none;-webkit-user-select:none;touch-action:none}
+canvas{position:fixed;inset:0;display:block}
+
+#bar{position:fixed;left:0;right:0;top:0;z-index:10;display:flex;align-items:center;gap:7px;flex-wrap:wrap;
+  padding:calc(8px + env(safe-area-inset-top)) 9px 8px;
+  background:linear-gradient(#0e1116f5,#0e111600);pointer-events:none}
+#bar>*{pointer-events:auto}
+.seg{display:flex;background:var(--panel);border:1px solid var(--line);border-radius:11px;padding:3px;gap:3px}
+.seg button{all:unset;cursor:pointer;color:var(--dim);font-size:13px;font-weight:600;
+  padding:7px 12px;border-radius:8px;transition:.15s;white-space:nowrap}
+.seg button.on{background:var(--panel2);color:#fff;box-shadow:inset 0 0 0 1px #ffffff1a}
+.seg.f button.on{background:var(--accent);color:#fff;box-shadow:none}
+.seg.mini button{padding:7px 9px;font-size:12px}
+#cur{margin-left:auto;background:var(--panel);border:1px solid var(--line);border-radius:11px;
+  padding:7px 11px;font-size:12px;color:var(--dim);white-space:nowrap}
+#cur b{color:#fff}
+#tools{display:none;gap:7px}
+#tools.on{display:flex}
+
+#legend{position:fixed;left:9px;bottom:calc(9px + env(safe-area-inset-bottom));z-index:10;
+  background:#161c25e8;border:1px solid var(--line);border-radius:12px;padding:8px 10px;
+  font-size:11px;color:var(--dim);line-height:1.9;transition:.2s}
+#legend .t{color:#fff;font-weight:600;font-size:11px;cursor:pointer;display:flex;align-items:center;gap:5px}
+#legend .t s{margin-left:auto;text-decoration:none;color:var(--dim);font-size:10px;transition:.2s}
+#legend.min .row{display:none}
+#legend.min .t s{transform:rotate(180deg)}
+#legend .row{cursor:pointer;display:flex;align-items:center}
+#legend .row.off{opacity:.3}
+#legend i{display:inline-block;width:9px;height:9px;border-radius:3px;margin-right:6px}
+
+#hint{position:fixed;left:50%;transform:translateX(-50%);bottom:calc(11px + env(safe-area-inset-bottom));
+  z-index:11;background:var(--panel);border:1px solid var(--line);border-radius:999px;
+  padding:8px 15px;font-size:12px;box-shadow:0 6px 22px #0009;transition:.2s;
+  max-width:62vw;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+#hint.ok{background:#182a1f;border-color:#2f5a3d}
+
+#card{position:fixed;right:9px;top:calc(54px + env(safe-area-inset-top));z-index:12;width:226px;
+  max-height:calc(100vh - 200px);overflow:auto;background:#161c25f5;border:1px solid var(--line);
+  border-radius:14px;padding:12px;box-shadow:0 12px 34px #000b;
+  transform:translateX(118%);transition:.28s cubic-bezier(.2,.8,.2,1)}
+#card.show{transform:none}
+#card h4{margin:0 0 9px;font-size:13px;display:flex;align-items:center;gap:6px}
+#card h4 s{width:7px;height:7px;border-radius:50%;background:var(--accent);text-decoration:none}
+.kv{display:flex;justify-content:space-between;gap:8px;font-size:12px;color:var(--dim);margin:3px 0}
+.kv b{color:#fff;font-weight:600;text-align:right;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;max-width:150px}
+#steps{margin:9px 0 0;padding:0;list-style:none;font-size:12px}
+#steps li{display:flex;gap:7px;align-items:baseline;padding:5px 0;border-top:1px dashed #ffffff14}
+#steps li u{text-decoration:none;color:var(--accent);font-weight:700;min-width:14px}
+#steps li em{font-style:normal;color:var(--dim);flex:1}
+#steps li.v em{color:#a9c8ff}
+#btns{display:flex;gap:7px;margin-top:11px}
+.btn{all:unset;cursor:pointer;text-align:center;flex:1;padding:9px 6px;border-radius:10px;font-size:12.5px;font-weight:600}
+.btn.p{background:var(--accent);color:#fff}.btn.p:active{transform:scale(.97)}
+.btn.g{background:var(--panel2);color:var(--dim);box-shadow:inset 0 0 0 1px var(--line)}
+#prog{height:4px;border-radius:4px;background:#ffffff14;margin-top:10px;overflow:hidden;display:none}
+#prog i{display:block;height:100%;width:0;background:linear-gradient(90deg,var(--accent),#7dd3fc)}
+
+#toast{position:fixed;left:50%;top:calc(58px + env(safe-area-inset-top));transform:translate(-50%,-12px);
+  z-index:20;background:#2a1b1d;border:1px solid #5c2c31;color:#ffd7d9;font-size:12.5px;
+  padding:9px 15px;border-radius:11px;opacity:0;transition:.22s;pointer-events:none;max-width:82vw;text-align:center}
+#toast.show{opacity:1;transform:translate(-50%,0)}
+#toast.ok{background:#16281d;border-color:#2e5b3f;color:#c8f7d6}
+
+#scale{position:fixed;right:9px;bottom:calc(9px + env(safe-area-inset-bottom));z-index:9;
+  font-size:10px;color:var(--dim);text-align:center;pointer-events:none}
+#scale i{display:block;height:5px;border:1px solid var(--dim);border-top:0;margin:0 auto}
+
+@media (max-width:560px){
+  #card{left:8px;right:8px;top:auto;width:auto;bottom:calc(44px + env(safe-area-inset-bottom));
+    max-height:40vh;transform:translateY(130%)}
+  #card.show{transform:none}
+  #hint{bottom:auto;top:calc(52px + env(safe-area-inset-top));left:8px;right:8px;transform:none;
+    max-width:none;text-align:center;border-radius:10px;font-size:11.5px;padding:7px 10px}
+  #toast{top:calc(86px + env(safe-area-inset-top))}
+  #legend{padding:5px 8px;font-size:10px;line-height:1.7}
+  #legend .t{font-size:10.5px}
+  #scale{display:none}
+}
+</style>
+</head>
+<body>
+<canvas id="cv"></canvas>
+
+<div id="bar">
+  <div class="seg f" id="fseg"></div>
+  <div class="seg" id="dseg"><button data-m="2" class="on">2D</button><button data-m="3">3D</button></div>
+  <div id="tools">
+    <div class="seg mini" id="gseg"><button data-g="rot" class="on">旋转</button><button data-g="pan">平移</button></div>
+    <div class="seg mini"><button id="bReset">复位</button></div>
+  </div>
+  <div id="cur"><b id="cfl">1F</b><span id="cnp"></span></div>
+</div>
+
+<div id="legend"></div>
+<div id="hint">点击两个位置，生成起点 A → 终点 B</div>
+
+<div id="card">
+  <h4><s></s>导航方案</h4>
+  <div class="kv">起点<b id="sA">—</b></div>
+  <div class="kv">终点<b id="sB">—</b></div>
+  <div class="kv">距离<b id="rDist">—</b></div>
+  <div class="kv">预计<b id="rTime">—</b></div>
+  <div class="kv">跨层<b id="rFlr">—</b></div>
+  <ul id="steps"></ul>
+  <div id="prog"><i></i></div>
+  <div id="btns">
+    <button class="btn p" id="bGo">▶ 模拟导航</button>
+    <button class="btn g" id="bClr">清除</button>
+  </div>
+</div>
+
+<div id="toast"></div>
+<div id="scale"><i id="sbar"></i><div id="stxt">20 m</div></div>
+
+<script>
+"use strict";
+/* ==========================================================================
+   室内地图导航 Demo —— 单文件 / 零依赖 / 纯 Canvas
+   · 1F / 2F / 3F 三层，默认 1F
+   · 2D 平面 ⇄ 3D 分层
+   · 3D 自由轨道：左右拖 = 水平旋转(yaw)，上下拖 = 俯仰(pitch)，可停在任意角度
+   · 点选两点 → 网格 A* → 起终点 + 跨层连线；模拟导航小人沿线行走
+   几何按参考图重绘：同一轮廓 × 3 层，左侧长翼 + 右上凸块 + 中央交通核 + 两处中庭
+   ========================================================================== */
+
+/* ---------- 1. 模型 ---------- */
+const MPP = 0.14;            // 1 地图单位 ≈ 0.14 m
+const FH  = 200;             // 3D 层高（世界单位）
+const SLAB_T = 13;           // 楼板厚度
+const ZONE_H = 15;           // 体块高度
+const CX = 360, CY = 210;    // 建筑平面中心
+
+// 建筑外轮廓（三层共用，与参考图一致：左长翼 + 上中部 + 右上凸块 + 右下）
+const SHAPE = [[0,140],[235,140],[235,55],[455,55],[455,0],[645,0],[645,115],[720,115],
+               [720,300],[565,300],[565,365],[435,365],[435,420],[0,420]];
+const R = (x0,y0,x1,y1)=>[[x0,y0],[x1,y0],[x1,y1],[x0,y1]];
+// 两处中庭：左侧长条 + 右侧不规则
+const HOLES = [R(95,195,420,255), [[575,120],[690,120],[700,155],[665,185],[585,175]]];
+// 中央竖向交通核
+const CORE = [455,55,565,300];
+const ESCS = [{x0:462,y0:70,x1:558,y1:118},{x0:462,y0:205,x1:558,y1:253}];
+const LIFTS= [{x:487,y:155},{x:533,y:155}];
+
+const FLOORS = [
+ { id:'F1', label:'1F', idx:0,
+   zones:[
+     {c:'teal', p:R(0,140,235,192)},                 // 左翼上沿
+     {c:'teal', p:R(0,300,235,365)},                 // 左翼下沿
+     {c:'teal', p:R(235,55,455,110)},                // 上中段
+     {c:'green',p:[[345,300],[455,205],[455,300],[400,365]]},  // 中央斜向绿化
+     {c:'lav',  p:R(455,0,645,115)},                 // 右上（餐饮）
+     {c:'pink', p:R(645,115,720,200)},
+     {c:'teal', p:R(645,200,720,300)},
+     {c:'pink', p:R(565,300,720,365)},
+     {c:'pink', p:R(235,365,340,420)},
+     {c:'pink', p:R(355,365,435,420)},
+     {c:'coral',p:R(240,265,330,300)}],
+   pois:[{k:'esc',x:436,y:35,n:'扶梯'},{k:'lift',x:468,y:35,n:'客梯'},
+         {k:'wc',x:392,y:285,n:'卫生间'},{k:'esc',x:436,y:285,n:'扶梯'},{k:'lift',x:468,y:285,n:'客梯'},
+         {k:'shop',x:300,y:82,n:'旗舰店'},{k:'shop',x:548,y:58,n:'咖啡'},
+         {k:'shop',x:682,y:160,n:'零售'},{k:'shop',x:300,y:392,n:'超市'},
+         {k:'exit',x:60,y:166,n:'北出入口'},{k:'exit',x:120,y:392,n:'西出入口'},
+         {k:'exit',x:600,y:332,n:'东出入口'},{k:'esc',x:682,y:255,n:'扶梯'}]},
+
+ { id:'F2', label:'2F', idx:1,
+   zones:[
+     {c:'teal', p:R(0,140,235,192)},
+     {c:'teal', p:R(0,300,235,365)},
+     {c:'teal', p:R(235,55,455,110)},
+     {c:'sage', p:[[345,300],[455,205],[455,300],[400,365]]},   // 斜向连廊平台
+     {c:'lav',  p:R(455,0,645,115)},
+     {c:'lav',  p:R(645,115,720,200)},
+     {c:'pink', p:R(645,200,720,300)},
+     {c:'teal', p:R(565,300,720,365)},
+     {c:'pink', p:R(235,365,340,420)},
+     {c:'coral',p:R(355,365,435,420)}],
+   pois:[{k:'wc',x:392,y:285,n:'卫生间'},{k:'esc',x:436,y:285,n:'扶梯'},{k:'lift',x:468,y:285,n:'客梯'},
+         {k:'wc',x:392,y:35,n:'卫生间'},{k:'esc',x:436,y:35,n:'扶梯'},{k:'lift',x:468,y:35,n:'客梯'},
+         {k:'shop',x:300,y:82,n:'影院'},
+         {k:'shop',x:548,y:58,n:'餐厅'},{k:'shop',x:682,y:160,n:'咖啡'},
+         {k:'esc',x:682,y:255,n:'扶梯'},{k:'lift',x:600,y:332,n:'货梯'}]},
+
+ { id:'F3', label:'3F', idx:2,
+   zones:[
+     {c:'teal', p:R(0,140,235,192)},
+     {c:'green',p:R(0,300,120,365)},
+     {c:'teal', p:R(120,300,235,365)},
+     {c:'teal', p:R(235,55,455,110)},
+     {c:'sage', p:[[345,300],[455,205],[455,300],[400,365]]},
+     {c:'teal', p:R(455,0,645,115)},                   // 右上大色块
+     {c:'pink', p:R(645,115,720,200)},
+     {c:'lav',  p:R(645,200,720,300)},
+     {c:'pink', p:R(565,300,720,365)},
+     {c:'pink', p:R(235,365,340,420)},{c:'pink',p:R(355,365,435,420)}],
+   pois:[{k:'wc',x:392,y:285,n:'卫生间'},{k:'esc',x:436,y:285,n:'扶梯'},{k:'lift',x:468,y:285,n:'客梯'},
+         {k:'wc',x:392,y:35,n:'卫生间'},{k:'esc',x:436,y:35,n:'扶梯'},{k:'lift',x:468,y:35,n:'客梯'},
+         {k:'shop',x:300,y:82,n:'影院'},{k:'shop',x:548,y:58,n:'自助餐'},
+         {k:'shop',x:682,y:160,n:'餐厅'},{k:'esc',x:682,y:255,n:'扶梯'}]}
+];
+const byIdx = i => FLOORS[i];
+
+const C = {teal:'#bfe3e0',lav:'#d9d2f0',sage:'#cfe6c4',pink:'#f6d3e4',green:'#a9d67f',
+           coral:'#f6b8ac',slab:'#eef1f5',core:'#c8d1dc',hole:'#f8fafc',
+           path:'#ff5a4d',link:'#3f7bff',a:'#ff4d4f',b:'#2fd07a'};
+const hidden = new Set();
+
+/* ---------- 2. 平面几何 ---------- */
+function inPoly(x,y,poly){
+  let s=false;
+  for(let i=0,j=poly.length-1;i<poly.length;j=i++){
+    const xi=poly[i][0],yi=poly[i][1],xj=poly[j][0],yj=poly[j][1];
+    if(((yi>y)!==(yj>y)) && x < (xj-xi)*(y-yi)/(yj-yi)+xi) s=!s;
+  }
+  return s;
+}
+const bb = poly=>{
+  let x0=1e9,y0=1e9,x1=-1e9,y1=-1e9;
+  for(const p of poly){x0=Math.min(x0,p[0]);y0=Math.min(y0,p[1]);x1=Math.max(x1,p[0]);y1=Math.max(y1,p[1]);}
+  return [x0,y0,x1,y1];
+};
+const inBB=(x,y,b)=>x>=b[0]&&y>=b[1]&&x<=b[2]&&y<=b[3];
+const HOLES_BB = HOLES.map(bb);
+const CORE_BB = bb([[CORE[0],CORE[1]],[CORE[2],CORE[3]]]);
+const inHole=(x,y)=>HOLES_BB.some(b=>inBB(x,y,b)) && HOLES.some(h=>inPoly(x,y,h));
+const inCore=(x,y)=>inBB(x,y,CORE_BB);
+function walkable(x,y){ return inPoly(x,y,SHAPE) && !inHole(x,y); }
+
+/* ---------- 3. 导航网格 + A* ---------- */
+const CELL=10, GX0=0, GX1=720, GY0=0, GY1=420;
+const floors=[];
+function buildGrid(){
+  const key=(x,y)=>x+'_'+y;
+  for(let fi=0;fi<3;fi++){
+    const map=new Map(), list=[];
+    for(let x=GX0;x<=GX1;x+=CELL) for(let y=GY0;y<=GY1;y+=CELL){
+      if(!walkable(x,y)) continue;
+      const n={gx:x,gy:y,fi,links:[]}; map.set(key(x,y),n); list.push(n);
+    }
+    floors.push({map,list});
+  }
+  const N8=[[1,0],[-1,0],[0,1],[0,-1],[1,1],[1,-1],[-1,1],[-1,-1]];
+  for(let fi=0;fi<3;fi++) for(const n of floors[fi].list){
+    for(const [dx,dy] of N8){
+      const m=floors[fi].map.get(key(n.gx+dx*CELL,n.gy+dy*CELL));
+      if(!m) continue;
+      if(dx&&dy && !(floors[fi].map.has(key(n.gx+dx*CELL,n.gy))&&floors[fi].map.has(key(n.gx,n.gy+dy*CELL)))) continue;
+      const pen = inZoneAt(m.gx,m.gy,fi)?1.7:1;      // 优先走公共通道
+      n.links.push({to:m,c:CELL*(dx&&dy?1.42:1)*pen});
+    }
+  }
+  const near=(fi,x,y)=>{
+    const kx=Math.round(x/CELL)*CELL, ky=Math.round(y/CELL)*CELL;
+    let best=null,bd=1e9;
+    for(let dy=-6;dy<=6;dy++) for(let dx=-6;dx<=6;dx++){
+      const n=floors[fi].map.get(key(kx+dx*CELL,ky+dy*CELL));
+      if(!n) continue;
+      const d=(n.gx-x)**2+(n.gy-y)**2; if(d<bd){bd=d;best=n;}
+    }
+    return best;
+  };
+  for(let fi=0;fi<2;fi++){
+    for(const e of ESCS){                            // 扶梯：跨 1 层
+      const cx=(e.x0+e.x1)/2;
+      for(const sy of [e.y0,e.y1]){
+        const a=near(fi,cx,sy), b=near(fi+1,cx,sy);
+        if(a&&b){a.links.push({to:b,c:170,v:{type:'esc',from:fi,to:fi+1}});
+                 b.links.push({to:a,c:170,v:{type:'esc',from:fi+1,to:fi}});}
+      }
+    }
+    for(const l of LIFTS){                           // 电梯
+      const a=near(fi,l.x,l.y), b=near(fi+1,l.x,l.y);
+      if(a&&b){a.links.push({to:b,c:260,v:{type:'lift',from:fi,to:fi+1}});
+               b.links.push({to:a,c:260,v:{type:'lift',from:fi+1,to:fi}});}
+    }
+  }
+}
+function inZoneAt(x,y,fi){
+  return FLOORS[fi].zones.some(z=>{
+    const b=z.bb||(z.bb=bb(z.p));
+    return inBB(x,y,b)&&inPoly(x,y,z.p);
+  });
+}
+buildGrid();
+
+function snapNode(x,y,fi){
+  let best=null,bd=1e9;
+  for(const m of floors[fi].list){ const d=(m.gx-x)**2+(m.gy-y)**2; if(d<bd){bd=d;best=m;} }
+  return best;
+}
+function Heap(){this.a=[];}
+Heap.prototype.push=function(v){const a=this.a;a.push(v);let i=a.length-1;
+  while(i>0){const p=(i-1)>>1;if(a[p].f<=a[i].f)break;const t=a[p];a[p]=a[i];a[i]=t;i=p;}};
+Heap.prototype.pop=function(){const a=this.a,top=a[0],last=a.pop();
+  if(a.length){a[0]=last;let i=0;for(;;){const l=2*i+1,r=l+1;let m=i;
+    if(l<a.length&&a[l].f<a[m].f)m=l;if(r<a.length&&a[r].f<a[m].f)m=r;
+    if(m===i)break;const t=a[m];a[m]=a[i];a[i]=t;i=m;}}return top;};
+function astar(s,t){
+  const g=new Map([[s,0]]),prev=new Map(),done=new Set(),h=new Heap();
+  const est=n=>Math.hypot(n.gx-t.gx,n.gy-t.gy)+Math.abs(n.fi-t.fi)*170;
+  h.push({n:s,f:est(s)});
+  while(h.a.length){
+    const cur=h.pop().n;
+    if(cur===t)break;
+    if(done.has(cur))continue; done.add(cur);
+    for(const L of cur.links){
+      if(done.has(L.to))continue;
+      const ng=g.get(cur)+L.c;
+      if(ng<(g.get(L.to)??Infinity)){g.set(L.to,ng);prev.set(L.to,cur);h.push({n:L.to,f:ng+est(L.to)});}
+    }
+  }
+  if(s!==t&&!prev.has(t))return null;
+  const out=[t];let c=t;
+  while(prev.has(c)){c=prev.get(c);out.push(c);}
+  return out.reverse();
+}
+function simplify(p,tol){
+  if(p.length<3)return p;
+  const keep=new Array(p.length).fill(false);keep[0]=keep[p.length-1]=true;
+  (function rec(a,b){
+    const [x1,y1]=p[a],[x2,y2]=p[b],L=Math.hypot(x2-x1,y2-y1)||1;
+    let md=-1,mi=-1;
+    for(let i=a+1;i<b;i++){
+      const d=Math.abs((y2-y1)*p[i][0]-(x2-x1)*p[i][1]+x2*y1-y2*x1)/L;
+      if(d>md){md=d;mi=i;}
+    }
+    if(md>tol&&mi>0){keep[mi]=true;rec(a,mi);rec(mi,b);}
+  })(0,p.length-1);
+  return p.filter((_,i)=>keep[i]);
+}
+function makeRoute(a,b){
+  const na=snapNode(a.x,a.y,a.fi), nb=snapNode(b.x,b.y,b.fi);
+  if(!na||!nb)return null;
+  const path=astar(na,nb); if(!path)return null;
+  // 按楼层分段简化，避免把跨层中间节点（2F 落点）合并掉
+  const seg=[]; let cur=[];
+  for(const n of path){
+    if(cur.length&&cur[cur.length-1][2]!==n.fi){seg.push(cur);cur=[];}
+    cur.push([n.gx,n.gy,n.fi]);
+  }
+  if(cur.length) seg.push(cur);
+  const line=[[a.x,a.y,a.fi]];
+  for(const g of seg) line.push(...simplify(g,6));
+  line.push([b.x,b.y,b.fi]);
+  let dist=0,flr=0,vtype='esc';
+  for(let i=1;i<path.length;i++){
+    const e=path[i-1].links.find(l=>l.to===path[i]);
+    if(e&&e.v){flr++;vtype=e.v.type;}
+  }
+  for(let i=1;i<line.length;i++) dist+=Math.hypot(line[i][0]-line[i-1][0],line[i][1]-line[i-1][1]);
+  return {line,dist,flr,vtype,meters:dist*MPP,minutes:dist*MPP/72};
+}
+
+/* ---------- 4. 轨道相机（yaw 左右转 + pitch 上下转，可停在任意视角） ---------- */
+const view={fi:0, scale:1, ox:0, oy:0, yaw:0, pitch:0, mode:'2', dragMode:'rot'};
+const HOME={yaw:-0.55, pitch:0.95};
+// 2D 与 3D 各自记住自己的相机，切换时互不干扰
+const cam2={scale:1,ox:0,oy:0};
+const cam3={yaw:HOME.yaw,pitch:HOME.pitch,scale:1,ox:0,oy:0};
+function saveCam(){ if(view.mode==='2'){cam2.scale=view.scale;cam2.ox=view.ox;cam2.oy=view.oy;}
+  else{cam3.yaw=view.yaw;cam3.pitch=view.pitch;cam3.scale=view.scale;cam3.ox=view.ox;cam3.oy=view.oy;} }
+function loadCam(){ if(view.mode==='2'){view.yaw=0;view.pitch=0;
+    view.scale=cam2.scale;view.ox=cam2.ox;view.oy=cam2.oy;}
+  else{view.yaw=cam3.yaw;view.pitch=cam3.pitch;view.scale=cam3.scale;view.ox=cam3.ox;view.oy=cam3.oy;} }
+const CZ0=FH;                                         // 堆叠中心（2F 标高）
+let cb=1,sb=0,ca=1,sa=0;
+function updCam(){ ca=Math.cos(view.yaw);sa=Math.sin(view.yaw);cb=Math.cos(view.pitch);sb=Math.sin(view.pitch); }
+// 世界 → 相机：[横向, 纵向(向下为正), 深度(越大越靠近相机)]
+function rotV(x,y,z){
+  const x1=x*ca-y*sa, y1=x*sa+y*ca;
+  return [x1, y1*cb-z*sb, z*cb-y1*sb];
+}
+function proj(x,y,z){
+  const r=rotV(x-CX,y-CY,z-CZ0);
+  return [(r[0]+CX+view.ox)*view.scale, (r[1]+CY+view.oy)*view.scale, r[2]];
+}
+// 屏幕 → 指定楼层平面（z = fi*FH）
+function unproj(sx,sy,fi){
+  if(Math.abs(cb)<0.05) return null;
+  const X=sx/view.scale-view.ox-CX;
+  const Y=sy/view.scale-view.oy-CY;
+  const z=fi*FH-CZ0;
+  const y1=(Y+z*sb)/cb;
+  return [CX+X*ca+y1*sa, CY-X*sa+y1*ca];
+}
+
+/* ---------- 5. 绘制 ---------- */
+const cv=document.getElementById('cv'), ctx=cv.getContext('2d');
+let W=innerWidth,H=innerHeight,DPR=1;
+function resize(){
+  DPR=Math.min(devicePixelRatio||1,2.5);
+  W=innerWidth;H=innerHeight;
+  cv.width=W*DPR;cv.height=H*DPR;cv.style.width=W+'px';cv.style.height=H+'px';
+  ctx.setTransform(DPR,0,0,DPR,0,0);
+  fitView(); draw();
+}
+addEventListener('resize',resize);
+
+function poly(pts,fc,st,lw){
+  ctx.beginPath();
+  for(let i=0;i<pts.length;i++) i?ctx.lineTo(pts[i][0],pts[i][1]):ctx.moveTo(pts[i][0],pts[i][1]);
+  ctx.closePath();
+  if(fc){ctx.fillStyle=fc;ctx.fill();}
+  if(st){ctx.strokeStyle=st;ctx.lineWidth=lw||1;ctx.stroke();}
+}
+function shade(hex,k){
+  const n=parseInt(hex.slice(1),16),f=v=>Math.max(0,Math.min(255,Math.round(v+k*255)));
+  return `rgb(${f(n>>16)},${f((n>>8)&255)},${f(n&255)})`;
+}
+// 面是否朝向相机（法向量与视线方向点积 > 0）
+function facing(n){ const r=rotV(n[0],n[1],n[2]); return r[2]>0; }
+function planNormal(a,b,ref,outward){
+  let nx=b[1]-a[1], ny=-(b[0]-a[0]);
+  const L=Math.hypot(nx,ny)||1; nx/=L; ny/=L;
+  const mx=(a[0]+b[0])/2-ref[0], my=(a[1]+b[1])/2-ref[1];
+  const away = (nx*mx+ny*my)>0;
+  if(away!==outward){nx=-nx;ny=-ny;}
+  return [nx,ny];
+}
+const centroid=p=>{let x=0,y=0;p.forEach(v=>{x+=v[0];y+=v[1];});return [x/p.length,y/p.length];};
+
+let A=null,B=null,route=null,walker=null,hover=null;
+
+function draw(){
+  updCam();
+  ctx.clearRect(0,0,W,H);
+  const g=ctx.createLinearGradient(0,0,0,H);
+  g.addColorStop(0,'#121821');g.addColorStop(1,'#0a0d12');
+  ctx.fillStyle=g;ctx.fillRect(0,0,W,H);
+
+  if(view.mode==='2'){ drawFloor(view.fi,false); }
+  else{
+    // 按深度排序：远的先画
+    const order=[0,1,2].map(fi=>({fi,d:rotV(0,0,fi*FH-CZ0+SLAB_T/2)[2]}))
+                     .sort((a,b)=>a.d-b.d).map(o=>o.fi);
+    for(const fi of order) drawFloor(fi, fi!==view.fi);
+  }
+  if(route) drawRoute();
+  if(hover&&!walker){
+    const z=view.fi*FH+SLAB_T+ZONE_H+2;
+    poly([proj(hover.x,hover.y,z),proj(hover.x+CELL,hover.y,z),
+          proj(hover.x+CELL,hover.y+CELL,z),proj(hover.x,hover.y+CELL,z)],'rgba(255,255,255,.22)');
+  }
+  if(A) drawPin(A,'起',C.a);
+  if(B) drawPin(B,'终',C.b);
+  if(walker) drawWalker();
+  drawScale();
+}
+
+function drawFloor(fi,dim){
+  const f=byIdx(fi), z0=fi*FH, zt=z0+SLAB_T;
+  ctx.save();
+
+  const top=SHAPE.map(p=>proj(p[0],p[1],zt));
+  const bot=SHAPE.map(p=>proj(p[0],p[1],z0));
+  const cOut=centroid(SHAPE);
+
+  if(dim){                                            // 非当前层：只画轮廓，避免叠层浑浊
+    ctx.globalAlpha=.55;
+    poly(top,null,'#33405a',1);
+    poly(bot,null,'#222c3e',1);
+    for(const h of HOLES) poly(h.map(q=>proj(q[0],q[1],zt)),null,'#2a3547',1);
+    ctx.globalAlpha=1;
+    floorLabel(fi); ctx.restore(); return;
+  }
+  // 楼板底面
+  if(facing([0,0,-1])) poly(bot.slice().reverse(), shade(C.slab,-.3));
+  // 外墙
+  for(let i=0;i<SHAPE.length;i++){
+    const a=SHAPE[i], b=SHAPE[(i+1)%SHAPE.length];
+    const n=planNormal(a,b,cOut,true);
+    if(!facing([n[0],n[1],0])) continue;
+    const light = -.05 + n[1]*.12 + n[0]*-.06;
+    poly([top[i],top[(i+1)%SHAPE.length],bot[(i+1)%SHAPE.length],bot[i]], shade(C.slab,light),'rgba(150,160,175,.5)',.6);
+  }
+  // 中庭洞口：洞壁 + 顶面
+  for(const h of HOLES){
+    const ht=h.map(p=>proj(p[0],p[1],zt)), hb=h.map(p=>proj(p[0],p[1],z0));
+    const cH=centroid(h);
+    for(let i=0;i<h.length;i++){
+      const a=h[i], b=h[(i+1)%h.length];
+      const n=planNormal(a,b,cH,false);               // 法向指向洞内
+      if(!facing([n[0],n[1],0])) continue;
+      poly([ht[i],ht[(i+1)%h.length],hb[(i+1)%h.length],hb[i]], shade('#dfe6ee',-.16+n[0]*.08),'rgba(150,160,175,.5)',.6);
+    }
+  }
+  // 顶面
+  if(facing([0,0,1])) poly(top, C.slab, '#b7c1ce',1);
+  // 洞口在顶面上的“掏空”
+  if(facing([0,0,1])) for(const h of HOLES){
+    poly(h.map(p=>proj(p[0],p[1],zt+.5)), C.hole, '#c0c9d4',1);
+  }
+
+  // 体块（分区）
+  const zs=f.zones.map(zn=>{
+    const c=centroid(zn.p);
+    return {zn, d:rotV(c[0]-CX,c[1]-CY,zt+ZONE_H-CZ0)[2]};
+  }).sort((a,b)=>a.d-b.d);
+  for(const {zn} of zs){
+    if(hidden.has(zn.c)) continue;
+    const base=zn.c, col=C[base];
+    const t=zn.p.map(p=>proj(p[0],p[1],zt+ZONE_H));
+    const b2=zn.p.map(p=>proj(p[0],p[1],zt+.6));
+    const cz=centroid(zn.p);
+    for(let i=0;i<zn.p.length;i++){
+      const a=zn.p[i], b=zn.p[(i+1)%zn.p.length];
+      const n=planNormal(a,b,cz,true);
+      if(!facing([n[0],n[1],0])) continue;
+      poly([t[i],t[(i+1)%zn.p.length],b2[(i+1)%zn.p.length],b2[i]], shade(col,-.15+n[0]*.09+n[1]*-.05));
+    }
+    if(facing([0,0,1])) poly(t, col, 'rgba(255,255,255,.6)',1);
+  }
+  // 交通核平台
+  if(!hidden.has('core')){
+    const cp=R(CORE[0],CORE[1],CORE[2],CORE[3]);
+    const t=cp.map(p=>proj(p[0],p[1],zt+3));
+    poly(t,C.core,'rgba(255,255,255,.5)',1);
+  }
+  // 扶梯：本层→上层的坡道
+  for(const e of ESCS){
+    if(fi<2 && !hidden.has('esc')){
+      const q=[[e.x0,e.y0,zt+4],[e.x1,e.y0,zt+4],[e.x1,e.y1,(fi+1)*FH+SLAB_T+4],[e.x0,e.y1,(fi+1)*FH+SLAB_T+4]];
+      poly(q.map(p=>proj(p[0],p[1],p[2])),'#a7b3c1','#7d8999',1);
+      ctx.strokeStyle='rgba(255,255,255,.6)';ctx.lineWidth=1;
+      for(let i=1;i<12;i++){
+        const t=i/12, y=e.y0+(e.y1-e.y0)*t, z=zt+4+((fi+1)*FH+SLAB_T-z0-SLAB_T)*t;
+        const a=proj(e.x0,y,z), b=proj(e.x1,y,z);
+        ctx.beginPath();ctx.moveTo(a[0],a[1]);ctx.lineTo(b[0],b[1]);ctx.stroke();
+      }
+    }
+    const r=R(e.x0,e.y0,e.x1,e.y1).map(p=>proj(p[0],p[1],zt+4.5));
+    poly(r,'#e7edf3','#8d9aaa',1);
+  }
+  // 电梯井
+  if(!hidden.has('lift')) for(const l of LIFTS){
+    const r=R(l.x-14,l.y-14,l.x+14,l.y+14);
+    const h=SLAB_T+42;
+    const t=r.map(p=>proj(p[0],p[1],z0+h)), b2=r.map(p=>proj(p[0],p[1],zt));
+    const cz=[l.x,l.y];
+    for(let i=0;i<4;i++){
+      const a=r[i], b=r[(i+1)%4];
+      const n=planNormal(a,b,cz,true);
+      if(!facing([n[0],n[1],0])) continue;
+      poly([t[i],t[(i+1)%4],b2[(i+1)%4],b2[i]], shade('#dde5ee',-.1+n[0]*.1));
+    }
+    if(facing([0,0,1])) poly(t,'#eef3f8','#8d9aaa',1);
+  }
+  // POI
+  if(!hidden.has('poi')){
+    const ps=f.pois.map(p=>{
+      const z=zt+ZONE_H+8;
+      const s=proj(p.x,p.y,z);
+      return {p,s,d:rotV(p.x-CX,p.y-CY,z-CZ0)[2]};
+    }).sort((a,b)=>a.d-b.d);
+    for(const {p,s} of ps) icon(p.k,s[0],s[1]);
+  }
+  floorLabel(fi);
+  ctx.restore();
+}
+function floorLabel(fi){
+  const f=byIdx(fi);
+  const p=proj(-30, 250, fi*FH+SLAB_T);
+  ctx.font='700 14px system-ui,sans-serif';ctx.textAlign='right';ctx.textBaseline='middle';
+  ctx.fillStyle=fi===view.fi?'#fff':'#5d6879';
+  ctx.fillText(f.label,p[0]-4,p[1]);
+}
+
+function icon(k,x,y){
+  if(x<-20||x>W+20||y<-20||y>H+20) return;
+  const s=17,u=s/17;
+  ctx.save();ctx.translate(x,y);
+  ctx.beginPath();
+  if(ctx.roundRect) ctx.roundRect(-s/2,-s/2,s,s,4.5); else ctx.rect(-s/2,-s/2,s,s);
+  ctx.fillStyle={wc:'#2f7fe0',esc:'#2fa84f',lift:'#7b61d8',shop:'#2f4bd8',exit:'#2fa84f'}[k]||'#555';
+  ctx.fill();
+  ctx.strokeStyle='#fff';ctx.fillStyle='#fff';ctx.lineWidth=1.3;ctx.lineCap='round';ctx.lineJoin='round';
+  if(k==='wc'){
+    ctx.beginPath();ctx.arc(-3.6*u,-5*u,1.6*u,0,7);ctx.fill();
+    ctx.beginPath();ctx.moveTo(-3.6*u,-3*u);ctx.lineTo(-6*u,3.5*u);ctx.moveTo(-3.6*u,-3*u);ctx.lineTo(-1.2*u,3.5*u);
+    ctx.moveTo(-5.6*u,-.6*u);ctx.lineTo(-1.6*u,-.6*u);ctx.stroke();
+    ctx.beginPath();ctx.arc(3.6*u,-5*u,1.6*u,0,7);ctx.fill();
+    ctx.beginPath();ctx.moveTo(3.6*u,-3*u);ctx.lineTo(3.6*u,3.6*u);ctx.stroke();
+    ctx.beginPath();ctx.moveTo(1.4*u,-2.4*u);ctx.lineTo(3.6*u,-1*u);ctx.lineTo(5.8*u,-2.4*u);ctx.stroke();
+  }else if(k==='esc'){
+    ctx.beginPath();ctx.arc(3*u,-5*u,1.7*u,0,7);ctx.fill();
+    ctx.beginPath();ctx.moveTo(3*u,-3*u);ctx.lineTo(1*u,1*u);ctx.lineTo(4*u,4.5*u);ctx.stroke();
+    ctx.beginPath();ctx.moveTo(-6*u,5.5*u);ctx.lineTo(6*u,5.5*u);ctx.moveTo(-4*u,5.5*u);ctx.lineTo(-4*u,2.5*u);
+    ctx.lineTo(-1*u,2.5*u);ctx.lineTo(-1*u,-.5*u);ctx.lineTo(2*u,-.5*u);ctx.stroke();
+  }else if(k==='lift'){
+    ctx.strokeRect(-6*u,-6*u,12*u,12*u);
+    ctx.beginPath();ctx.moveTo(0,-6*u);ctx.lineTo(0,6*u);ctx.stroke();
+    ctx.beginPath();ctx.moveTo(-5.2*u,.4*u);ctx.lineTo(-3.6*u,-1.8*u);ctx.lineTo(-2*u,.4*u);ctx.stroke();
+    ctx.beginPath();ctx.moveTo(2*u,-.4*u);ctx.lineTo(3.6*u,1.8*u);ctx.lineTo(5.2*u,-.4*u);ctx.stroke();
+  }else if(k==='shop'){
+    ctx.beginPath();ctx.arc(0,2.4*u,4*u,0,7);ctx.fill();
+    ctx.beginPath();ctx.moveTo(0,-1.6*u);ctx.lineTo(0,-5.6*u);ctx.stroke();
+  }else if(k==='exit'){
+    ctx.strokeRect(-6*u,-6*u,4.6*u,12*u);
+    ctx.beginPath();ctx.arc(1.4*u,-4.2*u,1.6*u,0,7);ctx.fill();
+    ctx.beginPath();ctx.moveTo(1.4*u,-2.4*u);ctx.lineTo(1.4*u,2*u);ctx.lineTo(5.4*u,4.6*u);ctx.stroke();
+  }
+  ctx.restore();
+}
+
+function drawRoute(){
+  const L=route.line;
+  ctx.save();ctx.lineJoin='round';ctx.lineCap='round';
+  for(let i=1;i<L.length;i++){
+    const p=L[i-1],q=L[i],cross=q[2]!==p[2];
+    const onFloor = view.mode==='3' || p[2]===view.fi || q[2]===view.fi;
+    ctx.globalAlpha=onFloor?1:.18;
+    ctx.strokeStyle=cross?C.link:C.path;
+    ctx.lineWidth=cross?3.4:4.4;
+    ctx.shadowColor=ctx.strokeStyle;ctx.shadowBlur=onFloor?12:0;
+    ctx.setLineDash(cross?[8,6]:[]);
+    const zA=p[2]*FH+SLAB_T+ZONE_H*.55, zB=q[2]*FH+SLAB_T+ZONE_H*.55;
+    const a=proj(p[0],p[1],zA), b=proj(q[0],q[1],zB);
+    ctx.beginPath();ctx.moveTo(a[0],a[1]);ctx.lineTo(b[0],b[1]);ctx.stroke();
+  }
+  ctx.restore();
+}
+function drawPin(pt,label,col){
+  const z=pt.fi*FH+SLAB_T+ZONE_H;
+  const base=proj(pt.x,pt.y,z);
+  const top =proj(pt.x,pt.y,z+52);
+  const k=Math.max(.6,Math.min(1.3,view.scale));
+  ctx.save();
+  ctx.fillStyle='rgba(255,255,255,.18)';
+  ctx.beginPath();ctx.ellipse(base[0],base[1],7*k,3*k,0,0,7);ctx.fill();
+  ctx.strokeStyle=col;ctx.lineWidth=2;ctx.setLineDash([4,4]);
+  ctx.beginPath();ctx.moveTo(base[0],base[1]);ctx.lineTo(top[0],top[1]+10*k);ctx.stroke();ctx.setLineDash([]);
+  const r=9.5*k;
+  ctx.shadowColor=col;ctx.shadowBlur=14;
+  ctx.beginPath();ctx.arc(top[0],top[1],r,0,7);ctx.fillStyle=col;ctx.fill();ctx.shadowBlur=0;
+  ctx.beginPath();ctx.moveTo(top[0]-r*.62,top[1]+r*.42);ctx.lineTo(top[0],top[1]+r+3*k);ctx.lineTo(top[0]+r*.62,top[1]+r*.42);
+  ctx.closePath();ctx.fillStyle=col;ctx.fill();
+  ctx.fillStyle='#fff';ctx.font=`700 ${11*k|0}px system-ui`;ctx.textAlign='center';ctx.textBaseline='middle';
+  ctx.fillText(label,top[0],top[1]+.5);
+  ctx.font=`600 ${10.5*k|0}px system-ui`;ctx.fillStyle=col;
+  ctx.fillText(pt.name,top[0],top[1]-14*k);
+  ctx.restore();
+}
+function drawWalker(){
+  const z=walker.fi*FH+SLAB_T+ZONE_H;
+  const p=proj(walker.x,walker.y,z);
+  const k=Math.max(.65,Math.min(1.4,view.scale));
+  ctx.save();ctx.translate(p[0],p[1]);ctx.scale(k,k);
+  ctx.fillStyle='rgba(77,141,255,.25)';
+  ctx.beginPath();ctx.ellipse(0,1,9,3.4,0,0,7);ctx.fill();
+  const sw=Math.sin(walker.phase)*(walker.moving?1:.2);
+  ctx.lineCap='round';
+  ctx.strokeStyle='#0f2f5c';ctx.lineWidth=3;
+  ctx.beginPath();ctx.moveTo(0,-8);ctx.lineTo(-3.6*sw,-1.5);ctx.moveTo(0,-8);ctx.lineTo(3.6*sw,-1.5);ctx.stroke();
+  ctx.strokeStyle='#3b82f6';ctx.lineWidth=4.2;
+  ctx.beginPath();ctx.moveTo(3.2*sw,-10);ctx.lineTo(0,-16);ctx.lineTo(-3.2*sw,-10);ctx.stroke();
+  ctx.strokeStyle='#1d4ed8';ctx.lineWidth=3.4;
+  ctx.beginPath();ctx.moveTo(0,-16);ctx.lineTo(0,-22);ctx.stroke();
+  ctx.fillStyle='#ffd9a8';ctx.beginPath();ctx.arc(0,-26,4.4,0,7);ctx.fill();
+  ctx.fillStyle='#0f2f5c';ctx.beginPath();ctx.arc(0,-27.4,4.4,Math.PI,0);ctx.fill();
+  ctx.restore();
+  if(walker.label){
+    ctx.font='600 11px system-ui';ctx.textAlign='center';ctx.textBaseline='middle';
+    const tw=ctx.measureText(walker.label).width+14;
+    ctx.fillStyle='rgba(18,24,34,.92)';
+    ctx.beginPath();
+    if(ctx.roundRect) ctx.roundRect(p[0]-tw/2,p[1]-52*k,tw,18,9); else ctx.rect(p[0]-tw/2,p[1]-52*k,tw,18);
+    ctx.fill();
+    ctx.fillStyle='#c7e3ff';ctx.fillText(walker.label,p[0],p[1]-43*k);
+  }
+}
+function drawScale(){
+  const meters=88/view.scale*MPP;
+  const nice=[5,10,20,50,100].reduce((p,c)=>Math.abs(c-meters)<Math.abs(p-meters)?c:p,5);
+  document.getElementById('sbar').style.width=(nice/MPP*view.scale)+'px';
+  document.getElementById('stxt').textContent=nice+' m';
+}
+
+/* ---------- 6. 视角自适应 ---------- */
+function fitView(){
+  updCam();
+  const list = view.mode==='3' ? [0,1,2] : [view.fi];
+  let x0=1e9,x1=-1e9,y0=1e9,y1=-1e9;
+  for(const fi of list) for(const v of SHAPE){
+    for(const z of [fi*FH, fi*FH+SLAB_T+ZONE_H+55]){
+      const r=rotV(v[0]-CX,v[1]-CY,z-CZ0);
+      x0=Math.min(x0,r[0]);x1=Math.max(x1,r[0]);y0=Math.min(y0,r[1]);y1=Math.max(y1,r[1]);
+    }
+  }
+  const pad=18, top=56, bottom=innerWidth<560?H*.42:66;
+  view.scale=Math.max(.12,Math.min(3.4,Math.min((W-pad*2)/(x1-x0),(H-top-bottom)/(y1-y0))));
+  view.ox=W/2/view.scale-CX-(x0+x1)/2;
+  view.oy=(top+(H-top-bottom)/2)/view.scale-CY-(y0+y1)/2;
+}
+
+/* ---------- 7. 交互：拖拽旋转 / 平移 / 缩放 / 拾取 ---------- */
+const hint=document.getElementById('hint'),toast=document.getElementById('toast');
+function say(m,ok){toast.textContent=m;toast.className='show'+(ok?' ok':'');
+  clearTimeout(say.t);say.t=setTimeout(()=>toast.className='',2100);}
+function setHint(m,ok){hint.textContent=m;hint.classList.toggle('ok',!!ok);}
+function setCur(){
+  document.getElementById('cfl').textContent=byIdx(view.fi).label;
+  document.getElementById('cnp').textContent = walker&&walker.label==='已到达'?' · 已到达'
+    : walker?' · 导航中' : route? ' · '+route.meters.toFixed(0)+' m':'';
+}
+const fseg=document.getElementById('fseg');
+[2,1,0].forEach(i=>{
+  const b=document.createElement('button');
+  b.textContent=byIdx(i).label;b.dataset.f=i;b.onclick=()=>setFloor(i);
+  fseg.appendChild(b);
+});
+function setFloor(i,keepView){
+  view.fi=i;
+  [...fseg.children].forEach(b=>b.classList.toggle('on',+b.dataset.f===i));
+  if(!keepView) fitView();
+  setCur();draw();
+}
+
+let ptrs=new Map(),drag=null,moved=0;
+cv.addEventListener('pointerdown',e=>{
+  cv.setPointerCapture(e.pointerId);
+  ptrs.set(e.pointerId,{x:e.clientX,y:e.clientY});
+  moved=0;
+  if(ptrs.size===2){const [a,b]=[...ptrs.values()];
+    drag={type:'pinch',d:Math.hypot(a.x-b.x,a.y-b.y),s:view.scale};}
+  else drag={type:'pan',x:e.clientX,y:e.clientY,
+             rot: view.mode==='3' && view.dragMode==='rot' && !e.shiftKey && e.buttons!==2};
+});
+cv.addEventListener('pointermove',e=>{
+  if(!ptrs.has(e.pointerId)){hoverAt(e.clientX,e.clientY);return;}
+  const prev=ptrs.get(e.pointerId);
+  ptrs.set(e.pointerId,{x:e.clientX,y:e.clientY});
+  const dx=e.clientX-prev.x, dy=e.clientY-prev.y;
+  moved+=Math.abs(dx)+Math.abs(dy);
+  if(drag&&drag.type==='pinch'&&ptrs.size>=2){
+    const [a,b]=[...ptrs.values()];
+    view.scale=Math.max(.12,Math.min(3.6,drag.s*(Math.hypot(a.x-b.x,a.y-b.y)/drag.d)));
+    draw();return;
+  }
+  if(moved<3) return;
+  if(drag.rot){
+    view.yaw   += dx*0.008;
+    view.pitch  = Math.max(0,Math.min(1.45, view.pitch + dy*0.007));
+    draw();
+  }else{
+    view.ox+=dx/view.scale; view.oy+=dy/view.scale; draw();
+  }
+});
+function endPtr(e){
+  if(!ptrs.has(e.pointerId))return;
+  const tap=moved<=7, pinch=drag&&drag.type==='pinch';
+  const rot=drag&&drag.rot;
+  ptrs.delete(e.pointerId);
+  if(ptrs.size){drag={type:'pinch'};return;}
+  drag=null;
+  if(tap&&!pinch&&!rot) pick(e.clientX,e.clientY);
+}
+addEventListener('pointerup',endPtr);
+addEventListener('pointercancel',endPtr);
+cv.addEventListener('contextmenu',e=>e.preventDefault());
+cv.addEventListener('wheel',e=>{
+  e.preventDefault();
+  if(e.ctrlKey||e.shiftKey){ view.yaw+=e.deltaY*0.003; draw(); return; }
+  const before=unproj(e.clientX,e.clientY,view.fi);
+  view.scale=Math.max(.12,Math.min(3.6,view.scale*Math.exp(-e.deltaY*.0015)));
+  if(before){
+    const after=proj(before[0],before[1],view.fi*FH);
+    view.ox+=(e.clientX-after[0])/view.scale; view.oy+=(e.clientY-after[1])/view.scale;
+  }
+  draw();
+},{passive:false});
+// 键盘方向键 = 精细旋转
+addEventListener('keydown',e=>{
+  const step=0.06;
+  if(e.key==='ArrowLeft'){view.yaw-=step;draw();e.preventDefault();}
+  if(e.key==='ArrowRight'){view.yaw+=step;draw();e.preventDefault();}
+  if(e.key==='ArrowUp'){view.pitch=Math.max(0,view.pitch-step);draw();e.preventDefault();}
+  if(e.key==='ArrowDown'){view.pitch=Math.min(1.5,view.pitch+step);draw();e.preventDefault();}
+  if(e.code==='Space'){e.preventDefault();document.getElementById('bGo').click();}
+  if(e.key==='1')setFloor(0);if(e.key==='2')setFloor(1);if(e.key==='3')setFloor(2);
+  if(e.key.toLowerCase()==='h')lg.classList.toggle('min');
+});
+
+function hitFloor(sx,sy){
+  const list = view.mode==='3' ? [2,1,0] : [view.fi];   // 上层遮挡下层
+  for(const fi of list){
+    const w=unproj(sx,sy,fi);
+    if(w&&walkable(w[0],w[1])) return {fi,x:w[0],y:w[1]};
+  }
+  return null;
+}
+function hoverAt(sx,sy){
+  const h=hitFloor(sx,sy);
+  cv.style.cursor=h?'crosshair':'default';
+  if(!h){if(hover){hover=null;draw();}return;}
+  const nx=Math.round(h.x/CELL)*CELL, ny=Math.round(h.y/CELL)*CELL;
+  if(!hover||hover.x!==nx||hover.y!==ny||hover.fi!==h.fi){hover={x:nx,y:ny,fi:h.fi};draw();}
+}
+function pick(sx,sy){
+  const h=hitFloor(sx,sy);
+  if(!h){say('这里不可通行（中庭洞口 / 建筑外 / 视角过平）');return;}
+  if(h.fi!==view.fi) setFloor(h.fi,true);
+  const nx=Math.round(h.x/CELL)*CELL, ny=Math.round(h.y/CELL)*CELL;
+  const pt={x:nx,y:ny,fi:h.fi,name:nearestPOI(nx,ny,h.fi)||placeName(nx,ny,h.fi)};
+  if(!A||B){A=pt;B=null;route=null;stopWalk();
+    document.getElementById('card').classList.remove('show');
+    setHint('已选起点「'+pt.name+'」，再点一处作为终点');}
+  else{B=pt;compute();}
+  setCur();draw();
+}
+function nearestPOI(x,y,fi){
+  let best=null,bd=1e9;
+  for(const p of FLOORS[fi].pois){const d=Math.hypot(p.x-x,p.y-y);if(d<bd){bd=d;best=p;}}
+  return (best&&bd<26)?best.n:null;
+}
+function placeName(x,y,fi){
+  if(inCore(x,y)) return FLOORS[fi].label+' 交通核';
+  const z=FLOORS[fi].zones.find(v=>inBB(x,y,v.bb||(v.bb=bb(v.p)))&&inPoly(x,y,v.p));
+  const nm={teal:'主力店',lav:'餐饮区',sage:'连廊平台',pink:'商铺',green:'绿化中庭',coral:'特卖区'}[z&&z.c];
+  return nm? FLOORS[fi].label+' '+nm : FLOORS[fi].label+' 通道';
+}
+function compute(){
+  const r=makeRoute(A,B);
+  if(!r){say('两点之间暂无可达路径，换个位置试试');route=null;
+    document.getElementById('card').classList.remove('show');return;}
+  route=r;stopWalk();
+  document.getElementById('sA').textContent=A.name;
+  document.getElementById('sB').textContent=B.name;
+  document.getElementById('rDist').textContent=r.meters.toFixed(0)+' m';
+  document.getElementById('rTime').textContent=Math.max(1,Math.round(r.minutes))+' 分钟';
+  document.getElementById('rFlr').textContent=r.flr? r.flr+' 次 · '+(r.vtype==='lift'?'电梯':'扶梯') : '0 次 · 同层';
+  const ul=document.getElementById('steps');ul.innerHTML='';
+  const segs=[];let cur={fi:A.fi,d:0};
+  for(let i=1;i<r.line.length;i++){
+    const p=r.line[i-1],q=r.line[i];
+    if(p[2]!==q[2]){
+      if(cur.d>10) segs.push({type:'w',fi:cur.fi,d:cur.d});
+      segs.push({type:'v',from:byIdx(p[2]).label,to:byIdx(q[2]).label,up:q[2]>p[2]});
+      cur={fi:q[2],d:0};
+    }else cur.d+=Math.hypot(q[0]-p[0],q[1]-p[1]);
+  }
+  if(cur.d>10) segs.push({type:'w',fi:cur.fi,d:cur.d});
+  if(!segs.length) segs.push({type:'w',fi:A.fi,d:r.dist});
+  let n=1;
+  for(const s of segs){
+    const li=document.createElement('li');
+    if(s.type==='w') li.innerHTML=`<u>${n++}</u><em>${byIdx(s.fi).label} 步行 ${(s.d*MPP).toFixed(0)} m</em>`;
+    else{li.className='v';li.innerHTML=`<u>${s.up?'⇧':'⇩'}</u><em>${s.up?'上':'下'}楼 ${s.from} → ${s.to}</em>`;}
+    ul.appendChild(li);
+  }
+  if(!segs.some(s=>s.type==='v')){
+    const li=document.createElement('li');li.innerHTML='<u>✓</u><em>全程同层，无需换乘</em>';ul.appendChild(li);
+  }
+  document.getElementById('card').classList.add('show');
+  setHint('路径已生成 · 点「模拟导航」让小人行走',true);
+  setCur();
+}
+
+/* ---------- 8. 模拟导航 ---------- */
+let raf=null,ws=null;
+function stopWalk(){
+  walker=null;ws=null;
+  if(raf)cancelAnimationFrame(raf);raf=null;
+  document.getElementById('prog').style.display='none';
+  document.getElementById('bGo').textContent='▶ 模拟导航';
+}
+function startWalk(){
+  if(!route){say('请先选择起点和终点');return;}
+  const L=route.line,seg=[];let total=0;
+  for(let i=1;i<L.length;i++){const d=Math.hypot(L[i][0]-L[i-1][0],L[i][1]-L[i-1][1]);seg.push(d);total+=d;}
+  if(!total){say('起点与终点重合');return;}
+  ws={L,seg,total,t:0,last:performance.now(),speed:110,paused:false};
+  walker={x:L[0][0],y:L[0][1],fi:L[0][2],phase:0,moving:true,label:''};
+  document.getElementById('prog').style.display='block';
+  document.getElementById('bGo').textContent='⏸ 暂停';
+  setHint('小人正在沿路径行走…',true);
+  if(raf)cancelAnimationFrame(raf);
+  raf=requestAnimationFrame(tick);
+}
+function tick(now){
+  if(!ws){if(raf){cancelAnimationFrame(raf);raf=null;}draw();return;}
+  const dt=Math.min(.05,(now-ws.last)/1000);ws.last=now;
+  if(!ws.paused){
+    ws.t=Math.min(ws.total,ws.t+dt*ws.speed);
+    let acc=0,i=0;
+    while(i<ws.seg.length-1&&acc+ws.seg[i]<ws.t){acc+=ws.seg[i];i++;}
+    const a=ws.L[i],b=ws.L[Math.min(i+1,ws.L.length-1)];
+    const k=ws.seg[i]?Math.max(0,Math.min(1,(ws.t-acc)/ws.seg[i])):0;
+    walker.x=a[0]+(b[0]-a[0])*k; walker.y=a[1]+(b[1]-a[1])*k;
+    const nfi=a[2]+(b[2]-a[2])*k;
+    if(view.mode==='2'&&Math.round(nfi)!==view.fi) setFloor(Math.round(nfi),true);
+    walker.fi=nfi; walker.phase+=dt*13; walker.moving=true;
+    walker.label=b[2]!==a[2]?(b[2]>a[2]?'↑ 上楼中':'↓ 下楼中'):'';
+    document.querySelector('#prog i').style.width=(ws.t/ws.total*100)+'%';
+    const p=proj(walker.x,walker.y,walker.fi*FH+SLAB_T+ZONE_H), want=[W/2,H*.55];
+    if(Math.hypot(p[0]-want[0],p[1]-want[1])>Math.min(W,H)*.26){
+      view.ox+=(want[0]-p[0])/view.scale; view.oy+=(want[1]-p[1])/view.scale;
+    }
+    if(ws.t>=ws.total) arrive();
+  }
+  draw();
+  if(ws) raf=requestAnimationFrame(tick);
+}
+function arrive(){
+  walker.label='已到达';walker.moving=false;
+  walker.fi=route.line[route.line.length-1][2];
+  setFloor(walker.fi,true);
+  document.getElementById('bGo').textContent='↺ 重新播放';
+  say('已到达终点：'+B.name,true);setHint('导航结束 · 可重新选点或重播',true);
+  setCur();ws=null;
+}
+document.getElementById('bGo').onclick=()=>{
+  if(ws){ws.paused=!ws.paused;
+    document.getElementById('bGo').textContent=ws.paused?'▶ 继续':'⏸ 暂停';
+    setHint(ws.paused?'已暂停':'小人正在沿路径行走…',true);return;}
+  startWalk();
+};
+document.getElementById('bClr').onclick=()=>{
+  A=B=null;route=null;stopWalk();hover=null;
+  document.getElementById('card').classList.remove('show');
+  setHint('点击两个位置，生成起点 A → 终点 B');setCur();draw();
+};
+
+/* ---------- 9. 控件 ---------- */
+document.getElementById('dseg').onclick=e=>{
+  const b=e.target.closest('button');if(!b)return;
+  const to=b.dataset.m;if(to===view.mode)return;
+  [...b.parentNode.children].forEach(x=>x.classList.toggle('on',x===b));
+  saveCam();
+  view.mode=to;
+  loadCam();
+  document.getElementById('tools').classList.toggle('on',to==='3');
+  fitView();draw();
+  setHint(to==='3'?'3D：拖动=左右/上下旋转 · 双指=平移缩放 · 可点任意楼层'
+                  :'2D：拖动平移 · 滚轮缩放 · 点击选点',true);
+};
+document.getElementById('gseg').onclick=e=>{
+  const b=e.target.closest('button');if(!b)return;
+  view.dragMode=b.dataset.g;
+  [...b.parentNode.children].forEach(x=>x.classList.toggle('on',x===b));
+  setHint(b.dataset.g==='rot'?'旋转模式：拖动改变视角':'平移模式：拖动移动地图',true);
+};
+document.getElementById('bReset').onclick=()=>{
+  if(view.mode==='3'){view.yaw=HOME.yaw;view.pitch=HOME.pitch;cam3.yaw=HOME.yaw;cam3.pitch=HOME.pitch;}
+  fitView();draw();say('已复位视角',true);
+};
+cv.addEventListener('dblclick',()=>{fitView();draw();});
+
+const lg=document.getElementById('legend');
+lg.innerHTML='<div class="t">图层<s>▾</s></div>'+
+ [['teal','主力店'],['lav','餐饮'],['sage','连廊'],['pink','商铺'],['green','绿化'],
+  ['core','交通核'],['esc','扶梯'],['lift','电梯'],['poi','POI 图标']]
+ .map(([k,n])=>`<div class="row" data-k="${k}"><i style="background:${C[k]||'#2f7fe0'}"></i>${n}</div>`).join('');
+lg.onclick=e=>{
+  if(e.target.closest('.t')){lg.classList.toggle('min');return;}
+  const r=e.target.closest('.row');if(!r)return;
+  r.classList.toggle('off');
+  const k=r.dataset.k;
+  hidden.has(k)?hidden.delete(k):hidden.add(k);
+  draw();
+};
+if(innerWidth<560) lg.classList.add('min');
+
+/* ---------- 10. 启动：默认 1F ---------- */
+resize();
+setFloor(0,true);
+A={x:250,y:390,fi:0,name:'1F 中庭入口'};      // 对应参考图 A 点位置
+B={x:470,y:70, fi:2,name:'3F 餐饮区'};        // 对应参考图 B 点位置
+compute();
+fitView();
+draw();
+setHint('默认 1F · 点击地图选两点，或切 3D 自由旋转',true);
+</script>
+</body>
+</html>
