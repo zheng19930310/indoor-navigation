@@ -98,9 +98,14 @@ canvas{position:fixed;inset:0;display:block}
 
 <div id="bar">
   <div class="seg f" id="fseg"></div>
-  <div class="seg" id="dseg"><button data-m="2" class="on">2D</button><button data-m="3">3D</button></div>
-  <div id="tools">
-    <div class="seg mini" id="gseg"><button data-g="rot" class="on">旋转</button><button data-g="pan">平移</button></div>
+  <div class="seg" id="dseg"><button data-m="2">2D</button><button data-m="3" class="on">3D</button></div>
+  <div id="tools" class="on">
+    <div class="seg mini" id="rotBtns">
+      <button data-r="l" title="向左旋转">⟲</button>
+      <button data-r="u" title="抬高视角">▲</button>
+      <button data-r="d" title="压低视角">▼</button>
+      <button data-r="r" title="向右旋转">⟳</button>
+    </div>
     <div class="seg mini"><button id="bReset">复位</button></div>
   </div>
   <div id="cur"><b id="cfl">1F</b><span id="cnp"></span></div>
@@ -366,13 +371,15 @@ function makeRoute(a,b){
 }
 
 /* ---------- 4. 轨道相机（yaw 左右转 + pitch 上下转，可停在任意视角） ---------- */
-const view={fi:0, scale:1, ox:0, oy:0, yaw:0, pitch:0, mode:'2', dragMode:'rot'};
+const view={fi:0, scale:1, ox:0, oy:0, yaw:0, pitch:0, mode:'2'};
 const HOME={yaw:-0.55, pitch:0.95};
 // 2D 与 3D 各自记住自己的相机，切换时互不干扰
-const cam2={scale:1,ox:0,oy:0};
-const cam3={yaw:HOME.yaw,pitch:HOME.pitch,scale:1,ox:0,oy:0};
-function saveCam(){ if(view.mode==='2'){cam2.scale=view.scale;cam2.ox=view.ox;cam2.oy=view.oy;}
-  else{cam3.yaw=view.yaw;cam3.pitch=view.pitch;cam3.scale=view.scale;cam3.ox=view.ox;cam3.oy=view.oy;} }
+const cam2={scale:1,ox:0,oy:0,ready:false};
+const cam3={yaw:HOME.yaw,pitch:HOME.pitch,scale:1,ox:0,oy:0,ready:false};
+function saveCam(){ if(view.mode==='2'){cam2.scale=view.scale;cam2.ox=view.ox;cam2.oy=view.oy;cam2.ready=true;}
+  else{cam3.yaw=view.yaw;cam3.pitch=view.pitch;cam3.scale=view.scale;cam3.ox=view.ox;cam3.oy=view.oy;cam3.ready=true;} }
+function saveCam3(){ if(view.mode==='3'){cam3.yaw=view.yaw;cam3.pitch=view.pitch;
+  cam3.scale=view.scale;cam3.ox=view.ox;cam3.oy=view.oy;} }
 function loadCam(){ if(view.mode==='2'){view.yaw=0;view.pitch=0;
     view.scale=cam2.scale;view.ox=cam2.ox;view.oy=cam2.oy;}
   else{view.yaw=cam3.yaw;view.pitch=cam3.pitch;view.scale=cam3.scale;view.ox=cam3.ox;view.oy=cam3.oy;} }
@@ -730,14 +737,20 @@ function setFloor(i,keepView){
 }
 
 let ptrs=new Map(),drag=null,moved=0;
+function twoF(){ const [a,b]=[...ptrs.values()]; return {d:Math.hypot(a.x-b.x,a.y-b.y),
+             mx:(a.x+b.x)/2,my:(a.y+b.y)/2}; }
 cv.addEventListener('pointerdown',e=>{
-  cv.setPointerCapture(e.pointerId);
+  try{ cv.setPointerCapture(e.pointerId); }catch(_){}   // 指针可能已失效，忽略
   ptrs.set(e.pointerId,{x:e.clientX,y:e.clientY});
   moved=0;
-  if(ptrs.size===2){const [a,b]=[...ptrs.values()];
-    drag={type:'pinch',d:Math.hypot(a.x-b.x,a.y-b.y),s:view.scale};}
-  else drag={type:'pan',x:e.clientX,y:e.clientY,
-             rot: view.mode==='3' && view.dragMode==='rot' && !e.shiftKey && e.buttons!==2};
+  if(ptrs.size===2){
+    const t=twoF();
+    drag={type:'pinch',d:t.d,s:view.scale,mx:t.mx,my:t.my,ox:view.ox,oy:view.oy};
+  }else{
+    // 3D 下单指默认旋转；2D 或“平移”模式下单指平移
+    const rot = view.mode==='3' && !e.shiftKey && e.buttons!==2;   // 3D 单指=旋转，Shift/右键=平移
+    drag={type:rot?'rot':'pan',x:e.clientX,y:e.clientY};
+  }
 });
 cv.addEventListener('pointermove',e=>{
   if(!ptrs.has(e.pointerId)){hoverAt(e.clientX,e.clientY);return;}
@@ -746,27 +759,34 @@ cv.addEventListener('pointermove',e=>{
   const dx=e.clientX-prev.x, dy=e.clientY-prev.y;
   moved+=Math.abs(dx)+Math.abs(dy);
   if(drag&&drag.type==='pinch'&&ptrs.size>=2){
-    const [a,b]=[...ptrs.values()];
-    view.scale=Math.max(.12,Math.min(3.6,drag.s*(Math.hypot(a.x-b.x,a.y-b.y)/drag.d)));
-    draw();return;
+    const t=twoF();
+    // 双指：以起始中点为锚缩放，并叠加中点位移（平移）
+    const ns=Math.max(.12,Math.min(3.6,drag.s*(t.d/drag.d)));
+    view.scale=ns;
+    view.ox = drag.ox + drag.mx*(1/drag.s - 1/ns) + (t.mx-drag.mx)/ns;
+    view.oy = drag.oy + drag.my*(1/drag.s - 1/ns) + (t.my-drag.my)/ns;
+    saveCam3(); draw(); return;
   }
   if(moved<3) return;
-  if(drag.rot){
-    view.yaw   += dx*0.008;
-    view.pitch  = Math.max(0,Math.min(1.45, view.pitch + dy*0.007));
+  if(drag.type==='rot'){
+    view.yaw   -= dx*0.0085;
+    view.pitch  = Math.max(0,Math.min(1.45, view.pitch - dy*0.0075));
+    saveCam3();
     draw();
   }else{
-    view.ox+=dx/view.scale; view.oy+=dy/view.scale; draw();
+    view.ox+=dx/view.scale; view.oy+=dy/view.scale;
+    saveCam3();
+    draw();
   }
 });
 function endPtr(e){
   if(!ptrs.has(e.pointerId))return;
-  const tap=moved<=7, pinch=drag&&drag.type==='pinch';
-  const rot=drag&&drag.rot;
+  const tap=moved<=8, pinch=drag&&drag.type==='pinch';
   ptrs.delete(e.pointerId);
-  if(ptrs.size){drag={type:'pinch'};return;}
+  if(ptrs.size){ const t=twoF();
+    drag={type:'pinch',d:t.d,s:view.scale,mx:t.mx,my:t.my,ox:view.ox,oy:view.oy}; return; }
   drag=null;
-  if(tap&&!pinch&&!rot) pick(e.clientX,e.clientY);
+  if(tap&&!pinch) pick(e.clientX,e.clientY);   // 轻点：旋转模式下也能选点
 }
 addEventListener('pointerup',endPtr);
 addEventListener('pointercancel',endPtr);
@@ -943,16 +963,29 @@ document.getElementById('dseg').onclick=e=>{
   view.mode=to;
   loadCam();
   document.getElementById('tools').classList.toggle('on',to==='3');
-  fitView();draw();
-  setHint(to==='3'?'3D：拖动=左右/上下旋转 · 双指=平移缩放 · 可点任意楼层'
+  const fresh = to==='3' ? !cam3.ready : !cam2.ready;   // 首次进入该模式才自动取景
+  if(fresh) fitView();
+  draw();
+  setHint(to==='3'?'3D：单指拖动旋转 · 双指平移缩放 · Shift+拖动也可平移'
                   :'2D：拖动平移 · 滚轮缩放 · 点击选点',true);
 };
-document.getElementById('gseg').onclick=e=>{
-  const b=e.target.closest('button');if(!b)return;
-  view.dragMode=b.dataset.g;
-  [...b.parentNode.children].forEach(x=>x.classList.toggle('on',x===b));
-  setHint(b.dataset.g==='rot'?'旋转模式：拖动改变视角':'平移模式：拖动移动地图',true);
-};
+(function(){
+  const step={l:[-.12,0],r:[.12,0],u:[0,-.10],d:[0,.10]};
+  let hold=null;
+  const nudge=dir=>{
+    const [dy,dp]=step[dir];
+    view.yaw+=dy; view.pitch=Math.max(0,Math.min(1.45,view.pitch+dp));
+    saveCam3(); draw();
+  };
+  document.getElementById('rotBtns').addEventListener('pointerdown',e=>{
+    const b=e.target.closest('button'); if(!b||view.mode!=='3') return;
+    e.preventDefault(); nudge(b.dataset.r);
+    clearTimeout(hold); hold=setInterval(()=>nudge(b.dataset.r),180);
+  });
+  ['pointerup','pointercancel','pointerleave'].forEach(t=>
+    document.getElementById('rotBtns').addEventListener(t,()=>clearInterval(hold)));
+  document.addEventListener('visibilitychange',()=>clearInterval(hold));
+})();
 document.getElementById('bReset').onclick=()=>{
   if(view.mode==='3'){view.yaw=HOME.yaw;view.pitch=HOME.pitch;cam3.yaw=HOME.yaw;cam3.pitch=HOME.pitch;}
   fitView();draw();say('已复位视角',true);
@@ -976,13 +1009,16 @@ if(innerWidth<560) lg.classList.add('min');
 
 /* ---------- 10. 启动：默认 1F ---------- */
 resize();
+view.mode='3'; view.yaw=HOME.yaw; view.pitch=HOME.pitch;
+cam3.yaw=HOME.yaw; cam3.pitch=HOME.pitch;
+[...document.getElementById('dseg').children].forEach(x=>x.classList.toggle('on',x.dataset.m==='3'));
 setFloor(0,true);
 A={x:250,y:390,fi:0,name:'1F 中庭入口'};      // 对应参考图 A 点位置
 B={x:470,y:70, fi:2,name:'3F 餐饮区'};        // 对应参考图 B 点位置
 compute();
 fitView();
 draw();
-setHint('默认 1F · 点击地图选两点，或切 3D 自由旋转',true);
+setHint('3D：单指拖动旋转 · 双指平移缩放 · 点两下生成导航',true);
 </script>
 </body>
 </html>
