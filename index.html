@@ -255,8 +255,8 @@ const FLOORS = [
 ];
 const byIdx = i => FLOORS[i];
 
-const C = {teal:'#bfe3e0',lav:'#d9d2f0',sage:'#cfe6c4',pink:'#f6d3e4',green:'#a9d67f',
-           coral:'#f6b8ac',slab:'#eef1f5',core:'#c8d1dc',hole:'#f8fafc',
+const C = {teal:'#96d2cd',lav:'#bcabe8',sage:'#a8d894',pink:'#f5b0cb',green:'#94cd62',
+           coral:'#f4a08b',slab:'#eef1f5',core:'#c8d1dc',hole:'#f8fafc',
            nogo:'#b9c3d0',nogo2:'#8d99ab',esc:'#7f8ea3',lift:'#c3cbd8',
            path:'#ff5a4d',link:'#3f7bff',a:'#ff4d4f',b:'#2fd07a'};
 const hidden = new Set();
@@ -508,6 +508,13 @@ const centroid=p=>{let x=0,y=0;p.forEach(v=>{x+=v[0];y+=v[1];});return [x/p.leng
 
 let A=null,B=null,route=null,walker=null,hover=null;
 
+/* ---------- 事件总线：外部通过 mallNav.on('route', cb) 监听 ---------- */
+const NAVH={};
+function emit(type,detail){
+  const arr=NAVH[type]; if(!arr||!arr.length) return;
+  for(const cb of arr.slice()){ try{ cb(detail||{}, type); }catch(err){ console.warn('[mallNav] 监听器异常:',type,err); } }
+}
+
 function draw(){
   updCam();
   ctx.clearRect(0,0,W,H);
@@ -548,6 +555,10 @@ function drawFloor(fi,dim){
     poly(top,null,'#33405a',1);
     poly(bot,null,'#222c3e',1);
     for(const h of holes) poly(h.map(q=>proj(q[0],q[1],zt)),null,'#2a3547',1);
+    // 非当前层也给区域底色，俯视时三层都能分出区块
+    ctx.globalAlpha=.32;
+    if(!hidden.has('shop')) for(const zn of f.zones)
+      poly(zn.p.map(p=>proj(p[0],p[1],zt+ZONE_H)), C[zn.c], 'rgba(58,72,92,.6)', .8);
     ctx.globalAlpha=.85;
     if(!hidden.has('shop')&&!hidden.has('names')) for(const zn of f.zones){
       const c=centroid(zn.p), t=zn.p.map(p=>proj(p[0],p[1],zt+ZONE_H));
@@ -618,17 +629,32 @@ function drawFloor(fi,dim){
     return {zn, d:rotV(c[0]-CX,c[1]-CY,zt+ZONE_H-CZ0)[2]};
   }).sort((a,b)=>a.d-b.d);
   const labels=[];
+  const EDGE='rgba(58,72,92,.85)';                      // 区域墙线（统一的深灰蓝，2D/3D 都读得出边界）
   for(const {zn} of zs){
     if(hidden.has('shop')) continue;
     const base=zn.c, col=C[base];
     const t=zn.p.map(p=>proj(p[0],p[1],zt+ZONE_H));
     const b2=zn.p.map(p=>proj(p[0],p[1],zt+.6));
     const cz=centroid(zn.p);
+    // 墙体：立面色块 + 线框
     for(let i=0;i<zn.p.length;i++){
       const a=zn.p[i], b=zn.p[(i+1)%zn.p.length];
       const n=planNormal(a,b,cz,true);
       if(!facing([n[0],n[1],0])) continue;
-      poly([t[i],t[(i+1)%zn.p.length],b2[(i+1)%zn.p.length],b2[i]], shade(col,-.15+n[0]*.09+n[1]*-.05));
+      poly([t[i],t[(i+1)%zn.p.length],b2[(i+1)%zn.p.length],b2[i]],
+           shade(col,-.18+n[0]*.09+n[1]*-.05), EDGE, .9);
+    }
+    // 屋顶：色块填充（2D 与俯视时区分区域的主色）+ 双线墙线
+    if(facing([0,0,1])){
+      poly(t, col, EDGE, 1.4);
+      poly(b2, null, 'rgba(58,72,92,.35)', .8);         // 底部轮廓 = 墙脚线
+      // 2D（正俯视）看不到立面，用内缩双线表达墙厚
+      if(view.mode==='2'){
+        const cz2=centroid(zn.p);
+        const inset=zn.p.map(p=>{const dx=p[0]-cz2[0],dy=p[1]-cz2[1];
+          return [p[0]-dx*.055,p[1]-dy*.055];});
+        poly(inset.map(p=>proj(p[0],p[1],zt+ZONE_H+.3)), null, 'rgba(58,72,92,.55)', 1);
+      }
     }
     if(facing([0,0,1]) && !hidden.has('names') && bigEnough(t, 46, 15)){
       labels.push({n:zn.n, c:proj(cz[0],cz[1],zt+ZONE_H+.4)});
@@ -915,10 +941,12 @@ const fseg=document.getElementById('fseg');
   fseg.appendChild(b);
 });
 function setFloor(i,keepView){
+  i=Math.max(0,Math.min(FLOORS.length-1, i|0));
   view.fi=i;
   [...fseg.children].forEach(b=>b.classList.toggle('on',+b.dataset.f===i));
   if(!keepView) fitView();
   setCur();draw();
+  emit('floor',{floor:i,index:i,label:byIdx(i).label});
 }
 
 let ptrs=new Map(),drag=null,moved=0;
@@ -1023,16 +1051,20 @@ function pick(sx,sy){
       : inAtrium(w[0],w[1])?'中庭洞口 · 不可通行'
       : inWell(w[0],w[1])?'电动扶梯井道 · 不可通行'
       : (nogoAt(w[0],w[1])||{t:'设备区'})+' · 不可通行';
-    say(why);return;}
+    say(why); emit('blocked',{reason:why,x:sx,y:sy}); return;}
   if(h.fi!==view.fi) setFloor(h.fi,true);
   const nx=Math.round(h.x/CELL)*CELL, ny=Math.round(h.y/CELL)*CELL;
   const pt={x:nx,y:ny,fi:h.fi,name:nearestPOI(nx,ny,h.fi)||placeName(nx,ny,h.fi)};
-  if(!A||B){A=pt;B=null;route=null;stopWalk();
-    document.getElementById('card').classList.remove('show');
-    setHint('已选起点「'+pt.name+'」，再点一处作为终点');}
-  else{B=pt;compute();}
-  setCur();draw();
+  autoPoint(pt); setCur();draw();
 }
+/* 交互选点：无起点或两点齐了 → 重开为起点；否则填终点 */
+function autoPoint(pt){
+  if(!A||B){ setStartPoint(pt); setHint('已选起点「'+pt.name+'」，再点一处作为终点'); return 'A'; }
+  setEndPoint(pt); compute(); return 'B';
+}
+function setStartPoint(pt){ A=pt; B=null; route=null; stopWalk();
+  document.getElementById('card').classList.remove('show'); emit('point',{role:'A',point:pt}); }
+function setEndPoint(pt){ B=pt; emit('point',{role:'B',point:pt}); }
 function nearestPOI(x,y,fi){
   let best=null,bd=1e9;
   for(const p of FLOORS[fi].pois){
@@ -1051,7 +1083,8 @@ function placeName(x,y,fi){
 function compute(){
   const r=makeRoute(A,B);
   if(!r){say('两点之间暂无可达路径，换个位置试试');route=null;
-    document.getElementById('card').classList.remove('show');return;}
+    document.getElementById('card').classList.remove('show');
+    emit('route',{ok:false,from:A,to:B});return;}
   route=r;stopWalk();
   document.getElementById('sA').textContent=A.name;
   document.getElementById('sB').textContent=B.name;
@@ -1086,60 +1119,88 @@ function compute(){
   document.getElementById('card').classList.add('show');
   setHint('路径已生成 · 点「模拟导航」让小人行走',true);
   setCur();
+  emit('route',{ok:true,...routeInfo()});
+}
+/* 路线摘要（供事件与 getState 复用） */
+function routeInfo(){
+  if(!route) return null;
+  const L=route.line, end=L[L.length-1];
+  return {distance:route.dist, meters:+route.meters.toFixed(1), minutes:+route.minutes.toFixed(1),
+          transfers:route.flr, vertical:route.vtype, points:L.length,
+          from:A?{x:A.x,y:A.y,fi:A.fi,name:A.name}:null,
+          to:B?{x:B.x,y:B.y,fi:B.fi,name:B.name}:null,
+          endFloor:Math.round(end[2])};
 }
 
 /* ---------- 8. 模拟导航 ---------- */
-let raf=null,ws=null;
+let raf=null,ws=null,wSpeed=1;
 function stopWalk(){
-  walker=null;ws=null;
+  walker=null;ws=null;walkTo._e=-1;
   if(raf)cancelAnimationFrame(raf);raf=null;
   document.getElementById('prog').style.display='none';
   document.getElementById('bGo').textContent='▶ 模拟导航';
 }
 function startWalk(){
-  if(!route){say('请先选择起点和终点');return;}
+  if(!route){say('请先选择起点和终点');return false;}
   const L=route.line,seg=[];let total=0;
   for(let i=1;i<L.length;i++){const d=Math.hypot(L[i][0]-L[i-1][0],L[i][1]-L[i-1][1]);seg.push(d);total+=d;}
-  if(!total){say('起点与终点重合');return;}
-  ws={L,seg,total,t:0,last:performance.now(),speed:110,paused:false};
+  if(!total){say('起点与终点重合');return false;}
+  ws={L,seg,total,t:0,last:performance.now(),speed:110*wSpeed,paused:false};
   walker={x:L[0][0],y:L[0][1],fi:L[0][2],phase:0,moving:true,label:''};
+  walkTo._e=-1;
   document.getElementById('prog').style.display='block';
   document.getElementById('bGo').textContent='⏸ 暂停';
   setHint('小人正在沿路径行走…',true);
+  emit('walk',{state:'start',progress:0,floor:Math.round(L[0][2]),x:walker.x,y:walker.y});
   if(raf)cancelAnimationFrame(raf);
   raf=requestAnimationFrame(tick);
+  return true;
+}
+/* 把小人放到路径累计距离 t（模型单位）处，并更新进度条与镜头跟随 */
+function walkTo(t){
+  if(!ws) return;
+  ws.t=Math.max(0,Math.min(ws.total,t));
+  let acc=0,i=0;
+  while(i<ws.seg.length-1&&acc+ws.seg[i]<ws.t){acc+=ws.seg[i];i++;}
+  const a=ws.L[i],b=ws.L[Math.min(i+1,ws.L.length-1)];
+  const k=ws.seg[i]?Math.max(0,Math.min(1,(ws.t-acc)/ws.seg[i])):0;
+  walker.x=a[0]+(b[0]-a[0])*k; walker.y=a[1]+(b[1]-a[1])*k;
+  const nfi=a[2]+(b[2]-a[2])*k;
+  if(view.mode==='2'&&Math.round(nfi)!==view.fi) setFloor(Math.round(nfi),true);
+  walker.fi=nfi; walker.moving=true;
+  walker.label=b[2]!==a[2]?(b[2]>a[2]?'↑ 上楼中':'↓ 下楼中'):'';
+  document.querySelector('#prog i').style.width=(ws.t/ws.total*100)+'%';
+  const p=proj(walker.x,walker.y,walker.fi*FH+SLAB_T+ZONE_H), want=[W/2,H*.55];
+  if(Math.hypot(p[0]-want[0],p[1]-want[1])>Math.min(W,H)*.26){
+    view.ox+=(want[0]-p[0])/view.scale; view.oy+=(want[1]-p[1])/view.scale;
+  }
+  const pr=ws.total?ws.t/ws.total:0;
+  if(walkTo._e<0 || pr-walkTo._e>=.099 || pr>=1){ walkTo._e=pr;
+    emit('walk',{state:'progress',progress:+pr.toFixed(3),floor:Math.round(nfi),
+                 x:+walker.x.toFixed(1),y:+walker.y.toFixed(1),
+                 name:placeName(walker.x,walker.y,Math.round(nfi))}); }
+  if(ws.t>=ws.total) arrive();
 }
 function tick(now){
   if(!ws){if(raf){cancelAnimationFrame(raf);raf=null;}draw();return;}
   const dt=Math.min(.05,(now-ws.last)/1000);ws.last=now;
-  if(!ws.paused){
-    ws.t=Math.min(ws.total,ws.t+dt*ws.speed);
-    let acc=0,i=0;
-    while(i<ws.seg.length-1&&acc+ws.seg[i]<ws.t){acc+=ws.seg[i];i++;}
-    const a=ws.L[i],b=ws.L[Math.min(i+1,ws.L.length-1)];
-    const k=ws.seg[i]?Math.max(0,Math.min(1,(ws.t-acc)/ws.seg[i])):0;
-    walker.x=a[0]+(b[0]-a[0])*k; walker.y=a[1]+(b[1]-a[1])*k;
-    const nfi=a[2]+(b[2]-a[2])*k;
-    if(view.mode==='2'&&Math.round(nfi)!==view.fi) setFloor(Math.round(nfi),true);
-    walker.fi=nfi; walker.phase+=dt*13; walker.moving=true;
-    walker.label=b[2]!==a[2]?(b[2]>a[2]?'↑ 上楼中':'↓ 下楼中'):'';
-    document.querySelector('#prog i').style.width=(ws.t/ws.total*100)+'%';
-    const p=proj(walker.x,walker.y,walker.fi*FH+SLAB_T+ZONE_H), want=[W/2,H*.55];
-    if(Math.hypot(p[0]-want[0],p[1]-want[1])>Math.min(W,H)*.26){
-      view.ox+=(want[0]-p[0])/view.scale; view.oy+=(want[1]-p[1])/view.scale;
-    }
-    if(ws.t>=ws.total) arrive();
-  }
+  if(!ws.paused) walkTo(ws.t+dt*ws.speed);
   draw();
   if(ws) raf=requestAnimationFrame(tick);
 }
 function arrive(){
+  if(!route) return;
   walker.label='已到达';walker.moving=false;
   walker.fi=route.line[route.line.length-1][2];
-  setFloor(walker.fi,true);
+  setFloor(Math.round(walker.fi),true);
   document.getElementById('bGo').textContent='↺ 重新播放';
   say('已到达终点：'+B.name,true);setHint('导航结束 · 可重新选点或重播',true);
-  setCur();ws=null;
+  setCur();
+  /* 先清状态再派发：监听器里可能立刻 route()+start() 开始下一段（巡更/多段动线），
+     若此时才置空 ws 会把新一段误杀。 */
+  const d={state:'arrive',progress:1,floor:Math.round(walker.fi),x:walker.x,y:walker.y,name:B?B.name:''};
+  ws=null;
+  emit('walk',d);
 }
 document.getElementById('bGo').onclick=()=>{
   if(ws){ws.paused=!ws.paused;
@@ -1154,10 +1215,11 @@ document.getElementById('bClr').onclick=()=>{
 };
 
 /* ---------- 9. 控件 ---------- */
-document.getElementById('dseg').onclick=e=>{
-  const b=e.target.closest('button');if(!b)return;
-  const to=b.dataset.m;if(to===view.mode)return;
-  [...b.parentNode.children].forEach(x=>x.classList.toggle('on',x===b));
+function applyMode(to){                    // '2' | '3'（内部与 API 共用）
+  to = String(to)==='2' ? '2' : '3';
+  if(to===view.mode) return false;
+  const btn=document.querySelector(`#dseg button[data-m="${to}"]`);
+  if(btn) [...btn.parentNode.children].forEach(x=>x.classList.toggle('on',x===btn));
   saveCam();
   view.mode=to;
   loadCam();
@@ -1167,6 +1229,16 @@ document.getElementById('dseg').onclick=e=>{
   draw();
   setHint(to==='3'?'3D：单指拖动旋转 · 双指平移缩放 · Shift+拖动也可平移'
                   :'2D：拖动平移 · 滚轮缩放 · 点击选点',true);
+  emit('mode',{mode:to});
+  return true;
+}
+function resetView(top){                    // 复位到默认机位
+  if(view.mode==='3'){view.yaw=HOME.yaw;view.pitch=HOME.pitch;cam3.yaw=HOME.yaw;cam3.pitch=HOME.pitch;}
+  fitView();draw();if(top!==false)say('已复位视角',true);
+  emit('camera',{mode:view.mode,yaw:view.yaw,pitch:view.pitch,scale:view.scale});
+}
+document.getElementById('dseg').onclick=e=>{
+  const b=e.target.closest('button');if(!b)return; applyMode(b.dataset.m);
 };
 (function(){
   const step={l:[-.12,0],r:[.12,0],u:[0,-.10],d:[0,.10]};
@@ -1185,10 +1257,7 @@ document.getElementById('dseg').onclick=e=>{
     document.getElementById('rotBtns').addEventListener(t,()=>clearInterval(hold)));
   document.addEventListener('visibilitychange',()=>clearInterval(hold));
 })();
-document.getElementById('bReset').onclick=()=>{
-  if(view.mode==='3'){view.yaw=HOME.yaw;view.pitch=HOME.pitch;cam3.yaw=HOME.yaw;cam3.pitch=HOME.pitch;}
-  fitView();draw();say('已复位视角',true);
-};
+document.getElementById('bReset').onclick=()=>resetView();
 cv.addEventListener('dblclick',()=>{fitView();draw();});
 
 const lg=document.getElementById('legend');
@@ -1196,19 +1265,235 @@ lg.innerHTML='<div class="t">图层<s>▾</s></div>'+
  [['shop','商铺色块'],['nogo','不可通行'],['esc','电动扶梯'],['lift','客梯'],['poi','POI 图标']]
  .map(([k,n])=>`<div class="row" data-k="${k}"><i style="background:${
    k==='nogo'?'repeating-linear-gradient(45deg,#b9c3d0 0 3px,#7d8a9c 3px 5px)':
-   k==='shop'?'linear-gradient(90deg,#bfe3e0,#f6d3e4)':C[k]||'#7f8ea3'}"></i>${n}</div>`).join('')+
+   k==='shop'?'linear-gradient(90deg,#96d2cd,#f5b0cb)':C[k]||'#7f8ea3'}"></i>${n}</div>`).join('')+
  '<div class="row" data-k="names"><i style="background:#26313f"></i>商铺名称</div>';
+const LAYERS=['shop','nogo','esc','lift','poi','names'];
+function toggleLayer(k,off){
+  const r=lg.querySelector(`.row[data-k="${k}"]`); if(!r) return false;
+  const has=hidden.has(k), want = off===undefined ? !has : !!off;
+  if(want) hidden.add(k); else hidden.delete(k);
+  r.classList.toggle('off',want);
+  draw(); emit('layer',{layer:k,visible:!want});
+  return !want;
+}
 lg.onclick=e=>{
   if(e.target.closest('.t')){lg.classList.toggle('min');return;}
   const r=e.target.closest('.row');if(!r)return;
-  r.classList.toggle('off');
-  const k=r.dataset.k;
-  hidden.has(k)?hidden.delete(k):hidden.add(k);
-  draw();
+  toggleLayer(r.dataset.k);
 };
 if(innerWidth<560) lg.classList.add('min');
 
-/* ---------- 10. 启动：默认 1F + 3D ---------- */
+/* ---------- 11. 对外 JS API（window.mallNav） ----------
+   所有交互动作都有一份可调用的方法，页面内嵌 / iframe / 上层业务都能直接集成。
+   事件：mallNav.on(type, cb) → 返回取消监听的函数；type ∈
+   ready floor mode camera point route walk layer blocked message search
+   ------------------------------------------------------------ */
+const EV=['ready','floor','mode','camera','point','route','walk','layer','blocked','message','search'];
+function on(t,cb){ if(!EV.includes(t)||typeof cb!=='function'){console.warn('[mallNav] on(type,cb) 未知事件',t);return ()=>{};}
+  (NAVH[t]=NAVH[t]||[]).push(cb); return ()=>off(t,cb); }
+function off(t,cb){ const a=NAVH[t]; if(a){const i=a.indexOf(cb); if(i>=0)a.splice(i,1);} }
+
+/* 坐标与名称 → 导航点。参数可以是：
+   '优衣库' | {name:'Apple'} | {x,y,floor|fi} | [x,y,floor]  */
+function resolvePt(p, defFi){
+  if(p==null) return null;
+  if(Array.isArray(p)) p={x:p[0],y:p[1],floor:p.length>2?p[2]:defFi};
+  if(typeof p==='string') p={name:p};
+  if(typeof p!=='object') return null;
+  let {x,y,floor,fi,name}=p;
+  if(!isFinite(x)||!isFinite(y)){
+    const hit=search(name||'')[0];
+    if(!hit) return null;
+    x=hit.x; y=hit.y; floor=hit.floor;
+  }
+  const f = Math.max(0,Math.min(FLOORS.length-1, Math.round(floor!==undefined?floor:(fi!==undefined?fi:(defFi||0)))));
+  const n = snapWalk(x,y,f);
+  if(!n) return null;
+  return {x:n.x,y:n.y,fi:f,name:name||placeName(n.x,n.y,f)};
+}
+function snapWalk(x,y,fi){                 // 就近吸附到可行走的网格节点
+  if(walkable(x,y)) return {x:Math.round(x/CELL)*CELL,y:Math.round(y/CELL)*CELL};
+  const n=snapNode(x,y,fi);
+  return n? {x:n.gx,y:n.gy}:null;
+}
+/* 模糊检索：商铺 / POI / 扶梯 / 客梯 / 楼梯 / 不可通行区 */
+const norm = s=>String(s||'').toLowerCase().replace(/\s+/g,'');
+function search(q){
+  const s=norm(q), out=[];
+  const hit=n=>{ if(!s) return false; const t=norm(n); return t.includes(s)||s.includes(t); };
+  FLOORS.forEach((f,fi)=>{
+    for(const z of f.zones){ if(!hit(z.n)) continue;
+      const c=centroid(z.p), n=snapWalk(c[0],c[1],fi);
+      out.push({name:z.n, floor:fi, floorLabel:f.label, x:n?n.x:c[0], y:n?n.y:c[1],
+                type:'shop', color:C[z.c], walkable:!!n, inZone:z.n}); }
+    for(const p of f.pois) if(hit(p.n))
+      out.push({name:p.n, floor:fi, floorLabel:f.label, x:p.x, y:p.y, type:'poi',
+                walkable:walkable(p.x,p.y), icon:p.k});
+  });
+  for(const e of ESCS){ if(!hit(e.n)&&!hit(e.s)) continue;
+    const fi=e.up?e.g:e.g+1, x=e.cx, y=e.up?e.yb:e.yt, n=snapWalk(x,y,fi);
+    out.push({name:e.n, floor:fi, floorLabel:byIdx(fi).label, x:n?n.x:x, y:n?n.y:y,
+              type:'escalator', walkable:!!n, dir:e.up?'up':'down'}); }
+  for(const l of LIFTS) if(hit(l.n))
+    out.push({name:l.n, floor:0, floorLabel:'1F/2F/3F', x:l.cx, y:l.y0-6, type:'lift', walkable:true});
+  for(const n of NOGO) if(hit(n.t))
+    out.push({name:n.t, floor:0, floorLabel:'各层', x:centroid(n.p)[0], y:centroid(n.p)[1],
+              type:'blocked', walkable:false});
+  out.sort((a,b)=>(b.walkable-a.walkable)||(a.name.length-b.name.length));
+  return out;
+}
+/* 相机：把某点居中（可选缩放），2D/3D 通用 */
+function centerOn(x,y,fi,scale){
+  updCam();
+  if(isFinite(scale)&&scale>0) view.scale=Math.max(.12,Math.min(3.6,scale));
+  const r=rotV(x-CX,y-CY,fi*FH+SLAB_T+ZONE_H-CZ0);
+  view.ox=W/2/view.scale-(r[0]+CX);
+  view.oy=H*.5/view.scale-(r[1]+CY);
+  if(view.mode==='3') saveCam3(); else saveCam();
+  draw();
+  emit('camera',{mode:view.mode,yaw:view.yaw,pitch:view.pitch,scale:view.scale});
+}
+function setCam(o){
+  o=o||{};
+  if(view.mode!=='3') return {yaw:0,pitch:0,ignored:'2D 模式无姿态，rotate() 仅 3D 生效'};
+  if(o.dYaw) view.yaw+=+o.dYaw;
+  if(o.dPitch) view.pitch+=+o.dPitch;
+  if(isFinite(o.yaw)) view.yaw=+o.yaw;
+  if(isFinite(o.pitch)) view.pitch=Math.max(0,Math.min(1.45,+o.pitch));
+  cam3.yaw=view.yaw; cam3.pitch=view.pitch;
+  draw(); emit('camera',{mode:view.mode,yaw:view.yaw,pitch:view.pitch,scale:view.scale});
+  return {yaw:view.yaw,pitch:view.pitch};
+}
+function navState(){
+  return {floor:view.fi, floorLabel:byIdx(view.fi).label, mode:view.mode,
+          yaw:+view.yaw.toFixed(3), pitch:+view.pitch.toFixed(3), scale:+view.scale.toFixed(3),
+          start:A?{...A}:null, end:B?{...B}:null, route:routeInfo(),
+          walking:!!ws, paused:!!(ws&&ws.paused),
+          progress:ws?+(ws.total?ws.t/ws.total:0).toFixed(3):0,
+          speed:ws?ws.speed/110:1,
+          walker:walker?{x:+walker.x.toFixed(1),y:+walker.y.toFixed(1),floor:+walker.fi.toFixed(2)}:null,
+          layers:LAYERS.reduce((m,k)=>(m[k]=!hidden.has(k),m),{})};
+}
+function notice(m,ok){ say(m,ok); setHint(m,ok); emit('message',{text:m,ok:!!ok}); }
+let NAV_READY=false;
+
+window.mallNav = {
+  version:'1.2.0',
+  /* — 就绪 — */
+  ready(cb){                                   // 就绪回调：已就绪则立即触发，可直接开始链式调用
+    if(typeof cb==='function') NAV_READY ? setTimeout(()=>cb(navState(),0),0) : this.on('ready',cb);
+    return this; },
+  /* — 视图 — */
+  setFloor(i,keepView){ setFloor(+i,!!keepView); return navState(); },
+  nextFloor(){ setFloor((view.fi+1)%FLOORS.length); return navState(); },
+  setViewMode(m){ applyMode(m); return navState(); },
+  rotate(o){ return setCam(o); },                        // {yaw,pitch,dYaw,dPitch}（弧度）
+  zoom(k,ax,ay){                                         // k：目标缩放倍数（0.12~3.6），可选以屏幕点 (ax,ay) 为锚点
+    updCam();
+    if(!isFinite(k)||k<=0) return view.scale;
+    const ns=Math.max(.12,Math.min(3.6,k));
+    const w = (ax===undefined)?null:unproj(ax,ay,view.fi);
+    view.scale=ns;
+    if(w){ const a=proj(w[0],w[1],view.fi*FH);
+      view.ox+=(ax-a[0])/view.scale; view.oy+=(ay-a[1])/view.scale; }
+    draw(); emit('camera',{mode:view.mode,yaw:view.yaw,pitch:view.pitch,scale:view.scale});
+    return view.scale;
+  },
+  fit(){ fitView(); draw(); return navState(); },
+  resetView(){ resetView(); return navState(); },
+  /* — 选点与路线 — */
+  setStart(p){ const pt=resolvePt(p,view.fi); if(!pt){notice('起点无法定位，请换一个位置');return null;}
+    setStartPoint(pt); setHint('已选起点「'+pt.name+'」'); setCur(); draw(); return {...pt}; },
+  setEnd(p){ const pt=resolvePt(p,view.fi); if(!pt){notice('终点无法定位，请换一个位置');return null;}
+    setEndPoint(pt); compute(); return {...pt}; },
+  route(a,b){                                            // route('星巴克','Apple Store') 或传坐标
+    const s=resolvePt(a,view.fi); if(!s){notice('起点无法定位');return null;}
+    const t=resolvePt(b,view.fi); if(!t){notice('终点无法定位');return null;}
+    setStartPoint(s); setEndPoint(t); compute();
+    return routeInfo();
+  },
+  reroute(){ compute(); return routeInfo(); },
+  clear(){ A=B=null;route=null;stopWalk();hover=null;
+    document.getElementById('card').classList.remove('show');
+    setHint('点击两个位置，生成起点 A → 终点 B');setCur();draw();
+    emit('route',{ok:false}); return true; },
+  /* — 模拟导航 — */
+  start(){ return startWalk(); },
+  pause(){ if(ws){ws.paused=true;document.getElementById('bGo').textContent='▶ 继续';
+    setHint('已暂停');emit('walk',{state:'pause',progress:ws.t/ws.total});return true;} return false; },
+  resume(){ if(ws){ws.paused=false;document.getElementById('bGo').textContent='⏸ 暂停';
+    ws.last=performance.now();setHint('小人正在沿路径行走…',true);
+    emit('walk',{state:'resume',progress:ws.t/ws.total});return true;}
+    return startWalk(); },
+  stop(){ stopWalk(); if(route){document.getElementById('bGo').textContent='▶ 模拟导航';}
+    emit('walk',{state:'stop',progress:0}); return true; },
+  seek(t){                                               // 0~1 进度，直接摆放小人并保持暂停
+    if(!route){notice('请先生成路线');return null;}
+    const L=route.line,seg=[];let total=0;
+    for(let i=1;i<L.length;i++){const d=Math.hypot(L[i][0]-L[i-1][0],L[i][1]-L[i-1][1]);seg.push(d);total+=d;}
+    ws={L,seg,total,t:0,last:performance.now(),speed:110*wSpeed,paused:true};
+    walker={x:L[0][0],y:L[0][1],fi:L[0][2],phase:0,moving:false,label:''};
+    walkTo._e=-1;
+    document.getElementById('prog').style.display='block';
+    document.getElementById('bGo').textContent='▶ 继续';
+    if(raf){cancelAnimationFrame(raf);raf=null;}
+    walkTo(total*Math.max(0,Math.min(1,+t||0)));
+    const pr=+(Math.max(0,Math.min(1,+t||0))).toFixed(3);
+    if(walker) walker.moving=false;
+    draw(); return pr;
+  },
+  setSpeed(k){                                           // 倍速，对下一次 start() 同样生效
+    wSpeed = Math.max(.1,Math.min(8,+k||1));
+    if(ws) ws.speed=110*wSpeed;
+    return wSpeed; },
+  /* — 检索 / 定位 — */
+  find(q){ const r=search(q); emit('search',{query:q,results:r.slice(0,8)}); return r; },
+  locate(q,opts){                                        // 切层 + 居中（可缩放）+ 提示
+    opts=opts||{};
+    const r=typeof q==='object'?q:search(q)[0];
+    if(!r){notice('没有找到「'+q+'」');return null;}
+    if(opts.mode) applyMode(opts.mode);
+    if(isFinite(opts.floor)) setFloor(opts.floor,true); else setFloor(r.floor,true);
+    centerOn(r.x,r.y,r.floor,opts.zoom);
+    setHint('已定位：'+r.floorLabel+' · '+r.name,true);
+    emit('point',{role:'locate',point:{x:r.x,y:r.y,fi:r.floor,name:r.name}});
+    return r;
+  },
+  goto(q, from){                                         // 一步到位：定起终点并出路线
+    const t=resolvePt(q,view.fi); if(!t){notice('终点无法定位');return null;}
+    const s=resolvePt(from,view.fi)||A||{x:t.x,y:t.y,floor:t.floor};
+    return this.route(s,t);
+  },
+  placeAt(x,y,fi){ return placeName(+x,+y,Math.max(0,Math.min(2,fi|0))); },
+  isWalkable(x,y,fi){ return walkable(+x,+y); },
+  /* — 图层 — */
+  toggleLayer(k,onOrOff){ return toggleLayer(k,onOrOff); },
+  setLayers(o){ Object.keys(o||{}).forEach(k=>toggleLayer(k,!o[k])); return navState().layers; },
+  /* — 坐标换算 — */
+  toScreen(x,y,fi){ const p=proj(+x,+y,(fi|0)*FH+SLAB_T); return {sx:p[0],sy:p[1],depth:p[2]}; },
+  toWorld(sx,sy,fi){ const w=unproj(+sx,+sy,fi|0); return w?{x:w[0],y:w[1]}:null; },
+  /* — 状态与事件 — */
+  state(){ return navState(); },
+  on, off,
+  events:EV.slice(),
+  data:{ mpp:MPP, floorHeight:FH, units:'模型单位（1 单位 = '+(MPP*100).toFixed(0)+' cm）',
+         floors:FLOORS.map((f,fi)=>({index:fi,label:f.label,zones:f.zones.map(z=>z.n),pois:f.pois.map(p=>p.n)})) }
+};
+/* iframe 集成：宿主页面可用 postMessage 调用，形如
+   {type:'mallNav:call', id:1, method:'route', args:['星巴克','Apple Store']} */
+addEventListener('message',e=>{
+  const d=e.data;
+  if(!d||d.type!=='mallNav:call') return;
+  const fn=window.mallNav[d.method];
+  let ok=true,res=null,err='';
+  try{ if(typeof fn!=='function') throw new Error('未知方法 '+d.method);
+       res = fn.apply(window.mallNav,d.args||[]); }
+  catch(ex){ ok=false; err=ex.message; }
+  (e.source||parent).postMessage({type:'mallNav:result',id:d.id,ok,data:ok?res:err},
+    e.origin&&e.origin!=='null'?e.origin:'*');
+});
+
+/* ---------- 12. 启动：默认 1F + 3D ---------- */
 resize();
 view.mode='3'; view.yaw=HOME.yaw; view.pitch=HOME.pitch;
 cam3.yaw=HOME.yaw; cam3.pitch=HOME.pitch;
@@ -1220,6 +1505,7 @@ compute();
 fitView();
 draw();
 setHint('3D：单指拖动旋转 · 双指平移缩放 · 点两下生成导航',true);
+NAV_READY=true; emit('ready',navState());        // API 就绪，可开始链式调用
 </script>
 </body>
 </html>
