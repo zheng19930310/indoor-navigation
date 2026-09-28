@@ -4,7 +4,12 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no,viewport-fit=cover">
 <meta name="theme-color" content="#0e1116">
-<title>室内导航 · 1F-3F</title>
+<title>室内导航 · 1F-3F · v1.2.0</title>
+<!--
+  版本标识：v1.2.0 · 构建 2026-09-28 · 提交 5b18167 · 单文件零依赖（无外链、无网络请求）
+  特性：区域色块填充 + 墙线 | 30° 电动扶梯剪刀式跨层 | 不可通行区标记 | window.mallNav API
+  源码仓库：https://gitee.com/mobuhan/indoor-navigation （index.html 与本文件一致）
+-->
 <style>
 :root{
   --bg:#0e1116;--panel:#161c25;--panel2:#212a36;--line:#2c3644;
@@ -29,6 +34,8 @@ canvas{position:fixed;inset:0;display:block}
 #cur{margin-left:auto;background:var(--panel);border:1px solid var(--line);border-radius:11px;
   padding:7px 11px;font-size:12px;color:var(--dim);white-space:nowrap}
 #cur b{color:#fff}
+#ver{background:var(--panel);border:1px solid var(--line);border-radius:11px;padding:7px 10px;
+  font-size:11px;color:#6f7d92;white-space:nowrap;font-variant-numeric:tabular-nums}
 #tools{display:none;gap:7px}
 #tools.on{display:flex}
 
@@ -109,6 +116,7 @@ canvas{position:fixed;inset:0;display:block}
     <div class="seg mini"><button id="bReset">复位</button></div>
   </div>
   <div id="cur"><b id="cfl">1F</b><span id="cnp"></span></div>
+  <div id="ver" title="">v—</div>
 </div>
 
 <div id="legend"></div>
@@ -1283,7 +1291,12 @@ lg.onclick=e=>{
 };
 if(innerWidth<560) lg.classList.add('min');
 
-/* ---------- 11. 对外 JS API（window.mallNav） ----------
+/* ---------- 11. 版本标识：任何一份下载副本都能自证来源与新旧 ---------- */
+const BUILD={version:'1.2.0', commit:'5b18167', built:'2026-09-28 02:53 +0800',
+             repo:'https://gitee.com/mobuhan/indoor-navigation',
+             file:'indoor-navigation.html', deps:'0（单文件，无外链/无网络请求）'};
+
+/* ---------- 12. 对外 JS API（window.mallNav） ----------
    所有交互动作都有一份可调用的方法，页面内嵌 / iframe / 上层业务都能直接集成。
    事件：mallNav.on(type, cb) → 返回取消监听的函数；type ∈
    ready floor mode camera point route walk layer blocked message search
@@ -1378,7 +1391,7 @@ function notice(m,ok){ say(m,ok); setHint(m,ok); emit('message',{text:m,ok:!!ok}
 let NAV_READY=false;
 
 window.mallNav = {
-  version:'1.2.0',
+  version:'1.2.0', build:BUILD, info(){ return {...BUILD}; },
   /* — 就绪 — */
   ready(cb){                                   // 就绪回调：已就绪则立即触发，可直接开始链式调用
     if(typeof cb==='function') NAV_READY ? setTimeout(()=>cb(navState(),0),0) : this.on('ready',cb);
@@ -1493,7 +1506,16 @@ addEventListener('message',e=>{
     e.origin&&e.origin!=='null'?e.origin:'*');
 });
 
-/* ---------- 12. 启动：默认 1F + 3D ---------- */
+/* 顶栏角标：一眼看出这份副本是哪个版本、什么时候构建的 */
+(function stampVersion(){
+  const el=document.getElementById('ver'); if(!el) return;
+  el.textContent='v'+BUILD.version+' · '+BUILD.built.slice(5,10);
+  el.title = ['版本 '+BUILD.version,'构建 '+BUILD.built,'提交 '+BUILD.commit,
+              '依赖 '+BUILD.deps,'源码 '+BUILD.repo,
+              '接口 window.mallNav（详见 API.md / INTEGRATION.md）'].join('\n');
+})();
+
+/* ---------- 13. 启动：默认 1F + 3D ---------- */
 resize();
 view.mode='3'; view.yaw=HOME.yaw; view.pitch=HOME.pitch;
 cam3.yaw=HOME.yaw; cam3.pitch=HOME.pitch;
