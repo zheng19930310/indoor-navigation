@@ -22,6 +22,7 @@
 
 | 方法 | 参数 | 返回 | 说明 |
 |---|---|---|---|
+| `mallNav.info()` | — | `{version, since, built, repo, file, deps, model, expected, ok, zones, floors}` | 版本与完整性自检：`model` 是几何/铺位数据的指纹，`ok:false` 说明这份副本被截断或改坏 |
 | `mallNav.ready(cb)` | `cb(state)` | `mallNav` | 就绪回调。若页面已启动完成，会在下一个 tick 立即触发，因此任何时候调用都安全 |
 | `mallNav.on(type, cb)` | `type` 见下表，`cb(detail, type)` | **取消监听的函数** | 注册事件 |
 | `mallNav.off(type, cb)` | 同 `on` | — | 手动移除 |
@@ -111,7 +112,17 @@ mallNav.toggleLayer('names', true);          // 隐藏店名（hide=true）
 mallNav.setLayers({shop:true, names:true, poi:false});   // true=显示
 ```
 
-## 6. 状态与数据
+## 6. 状态、版本与数据
+
+集成方在加载后可先校验副本完整性，再决定是否需要重新拉取：
+
+```js
+const bi = mallNav.info();
+if (!bi.ok) console.error('导航文件不完整', bi.model, '≠', bi.expected);
+else console.log(`v${bi.version} · ${bi.built} · ${bi.floors} 层 / ${bi.zones} 铺位 · ${bi.deps}`);
+```
+页面顶栏右侧的 `v1.2.0 · 09-28` 角标即同一份元数据，悬停可看构建时间、提交号、指纹与仓库地址。
+
 
 ```js
 mallNav.state();

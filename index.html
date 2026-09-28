@@ -6,7 +6,7 @@
 <meta name="theme-color" content="#0e1116">
 <title>室内导航 · 1F-3F · v1.2.0</title>
 <!--
-  版本标识：v1.2.0 · 构建 2026-09-28 · 提交 5b18167 · 单文件零依赖（无外链、无网络请求）
+  版本标识：v1.2.0 · 构建 2026-09-28 11:31 (+0800) · 起始提交 5b18167 · 模型指纹 80f2c1cc · 单文件零依赖（无外链、无网络请求）
   特性：区域色块填充 + 墙线 | 30° 电动扶梯剪刀式跨层 | 不可通行区标记 | window.mallNav API
   源码仓库：https://gitee.com/mobuhan/indoor-navigation （index.html 与本文件一致）
 -->
@@ -1292,9 +1292,22 @@ lg.onclick=e=>{
 if(innerWidth<560) lg.classList.add('min');
 
 /* ---------- 11. 版本标识：任何一份下载副本都能自证来源与新旧 ---------- */
-const BUILD={version:'1.2.0', commit:'5b18167', built:'2026-09-28 02:53 +0800',
+const BUILD={version:'1.2.0', since:'5b18167', built:'2026-09-28 11:31 +0800',
              repo:'https://gitee.com/mobuhan/indoor-navigation',
              file:'indoor-navigation.html', deps:'0（单文件，无外链/无网络请求）'};
+/* 模型指纹：只哈希几何与铺位数据，与注释、排版无关，因此能自校验且不引用自身内容。
+   下载副本若被截断或改坏，integrity().ok 为 false，角标会提示不一致。 */
+const MODEL_HASH='80f2c1cc';
+function fnv(str){ let h=0x811c9dc5>>>0;
+  for(let i=0;i<str.length;i++){ h^=str.charCodeAt(i); h=Math.imul(h,0x01000193)>>>0; }
+  return h.toString(16).padStart(8,'0'); }
+const modelDump = ()=>JSON.stringify([SHAPE,ATRIUM,WELLS,LIFTS,STAIRS.map(x=>x.p),
+  ESCS.map(e=>[e.x0,e.x1,e.yb,e.yt,e.g,e.up]), FLOORS.map(f=>f.zones.map(z=>z.c+z.n+z.p))]);
+function integrity(){
+  const h=fnv(modelDump());
+  return {model:h, expected:MODEL_HASH, ok:h===MODEL_HASH,
+          zones:FLOORS.reduce((n,f)=>n+f.zones.length,0), floors:FLOORS.length};
+}
 
 /* ---------- 12. 对外 JS API（window.mallNav） ----------
    所有交互动作都有一份可调用的方法，页面内嵌 / iframe / 上层业务都能直接集成。
@@ -1391,7 +1404,8 @@ function notice(m,ok){ say(m,ok); setHint(m,ok); emit('message',{text:m,ok:!!ok}
 let NAV_READY=false;
 
 window.mallNav = {
-  version:'1.2.0', build:BUILD, info(){ return {...BUILD}; },
+  version:'1.2.0', build:BUILD,
+  info(){ return {...BUILD, ...integrity()}; },        // 版本 + 完整性，集成方可据此校验副本
   /* — 就绪 — */
   ready(cb){                                   // 就绪回调：已就绪则立即触发，可直接开始链式调用
     if(typeof cb==='function') NAV_READY ? setTimeout(()=>cb(navState(),0),0) : this.on('ready',cb);
@@ -1510,7 +1524,9 @@ addEventListener('message',e=>{
 (function stampVersion(){
   const el=document.getElementById('ver'); if(!el) return;
   el.textContent='v'+BUILD.version+' · '+BUILD.built.slice(5,10);
-  el.title = ['版本 '+BUILD.version,'构建 '+BUILD.built,'提交 '+BUILD.commit,
+  const ig=integrity();
+  el.title = ['版本 '+BUILD.version,'构建 '+BUILD.built,'本版本自提交 '+BUILD.since,
+              '模型指纹 '+ig.model+' · '+(ig.ok?'完整':'与发布版不一致'), ig.floors+' 层 / '+ig.zones+' 个铺位',
               '依赖 '+BUILD.deps,'源码 '+BUILD.repo,
               '接口 window.mallNav（详见 API.md / INTEGRATION.md）'].join('\n');
 })();

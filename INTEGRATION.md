@@ -205,4 +205,9 @@ setInterval(() => mallNav.rotate({ dYaw: 0.004 }), 30);
 
 // ③ 复位到干净状态
 mallNav.stop(); mallNav.clear(); mallNav.resetView(); mallNav.setFloor(0);
+
+// ④ 上线前自检：确认这份副本没被截断、版本对得上
+const bi = mallNav.info();
+console.assert(bi.ok, '文件不完整', bi.model, bi.expected);
+console.log(`v${bi.version} · ${bi.built} · ${bi.zones} 个铺位`);
 ```
