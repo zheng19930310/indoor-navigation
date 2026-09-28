@@ -136,91 +136,128 @@ canvas{position:fixed;inset:0;display:block}
 "use strict";
 /* ==========================================================================
    室内地图导航 Demo —— 单文件 / 零依赖 / 纯 Canvas
-   · 1F / 2F / 3F 三层，默认 1F
-   · 2D 平面 ⇄ 3D 分层
-   · 3D 自由轨道：左右拖 = 水平旋转(yaw)，上下拖 = 俯仰(pitch)，可停在任意角度
-   · 点选两点 → 网格 A* → 起终点 + 跨层连线；模拟导航小人沿线行走
-   几何按参考图重绘：同一轮廓 × 3 层，左侧长翼 + 右上凸块 + 中央交通核 + 两处中庭
+   · 1F / 2F / 3F 三层，默认 1F + 3D
+   · 色块 = 商铺，名称默认显示（含非当前层的淡色标注）
+   · 斜纹区域 = 不可通行：中庭洞口、扶梯井、电梯井、疏散楼梯、设备机房
+   · 电动扶梯按真实 30° 倾角建模（提升 FH、水平投影 FH/tan30°），剪刀式上下行分井
+   · 3D 自由轨道：单指拖 = yaw + pitch，可停在任意角度；双指平移缩放
+   · 点选两点 → 网格 A* → 导航线沿扶梯斜面跨层；模拟导航小人沿线行走
    ========================================================================== */
 
 /* ---------- 1. 模型 ---------- */
 const MPP = 0.14;            // 1 地图单位 ≈ 0.14 m
-const FH  = 200;             // 3D 层高（世界单位）
-const SLAB_T = 13;           // 楼板厚度
-const ZONE_H = 15;           // 体块高度
+const FH  = 62;              // 3D 层高（世界单位）= 8.7 m 结构层高（含梁与吊顶）
+const SLAB_T = 7;            // 楼板厚度
+const ZONE_H = 12;           // 商铺体块高度
 const CX = 360, CY = 210;    // 建筑平面中心
 
 // 建筑外轮廓（三层共用，与参考图一致：左长翼 + 上中部 + 右上凸块 + 右下）
 const SHAPE = [[0,140],[235,140],[235,55],[455,55],[455,0],[645,0],[645,115],[720,115],
                [720,300],[565,300],[565,365],[435,365],[435,420],[0,420]];
 const R = (x0,y0,x1,y1)=>[[x0,y0],[x1,y0],[x1,y1],[x0,y1]];
-// 两处中庭：左侧长条 + 右侧不规则
-const HOLES = [R(95,195,420,255), [[575,120],[690,120],[700,155],[665,185],[585,175]]];
-// 中央竖向交通核
-const CORE = [455,55,565,300];
-const ESCS = [{x0:462,y0:70,x1:558,y1:118},{x0:462,y0:205,x1:558,y1:253}];
-const LIFTS= [{x:487,y:155},{x:533,y:155}];
 
+/* ---------- 1a. 中庭与扶梯井：楼板上的“开口”，不可站立、且各层掏空 ---------- */
+const ATRIUM = [R(95,195,420,255), [[598,120],[660,120],[668,152],[644,184],[600,176]]];
+/* 电动扶梯几何：提升高度 FH=62 单位（8.7 m），要维持 30° 倾角，
+   水平投影 = FH / tan30° = 107 单位（15.0 m）。
+   井道开口 = 斜跑的平面投影，两端各留 4 单位落客平台（可站立、上下梯处）。 */
+const ESC_RUN = Math.round(FH/Math.tan(Math.PI/6));   // 107
+const ESC_ANG = Math.atan2(FH, ESC_RUN);               // ≈30°
+/* 剪刀式布置：A 井（y 45-135）负责 1F⇄2F，B 井（y 195-285）负责 2F⇄3F。
+   g = 所跨楼层间隙（0:1F→2F，1:2F→3F），up = 运行方向。
+   这样 1F→3F 会先坐 A 井上行、过厅换 B 井上行，不会沿同一井道折返。 */
+const ESCS = [
+  {x0:458,x1:480, cx:469, yb:42, yt:149, g:0, up:true,  n:'电动扶梯 E1 · 1F→2F ↑',s:'E1 ↑'},
+  {x0:488,x1:510, cx:499, yb:42, yt:149, g:0, up:false, n:'电动扶梯 E2 · 2F→1F ↓',s:'E2 ↓'},
+  {x0:458,x1:480, cx:469, yb:185,yt:292, g:1, up:true,  n:'电动扶梯 E3 · 2F→3F ↑',s:'E3 ↑'},
+  {x0:488,x1:510, cx:499, yb:185,yt:292, g:1, up:false, n:'电动扶梯 E4 · 3F→2F ↓',s:'E4 ↓'},
+];
+const WELLS = [R(458,42,510,149), R(458,185,510,292)];   // 斜跑的平面投影
+const HOLES = ATRIUM.concat(WELLS);                    // 全部不可行走
+/* 楼板真实开洞：A 井（1F→2F）只在 2F 楼板开口，B 井（2F→3F）只在 3F 楼板开口，
+   起点层是落在实体楼板上的落客平台，不掏空。 */
+const slabHoles = fi => ATRIUM.concat(fi===1?[WELLS[0]]:fi===2?[WELLS[1]]:[]);
+
+/* ---------- 1b. 不可通行区域（结构 / 设备 / 疏散楼梯）---------- */
+const LIFTS = [{x0:520,y0:155,x1:538,y1:180,cx:529,cy:150,n:'客梯 LT1'},
+               {x0:542,y0:155,x1:560,y1:180,cx:551,cy:150,n:'客梯 LT2'}];
+const STAIRS = [{p:R(562,236,592,268), n:'疏散楼梯'}, {p:R(562,62,592,94), n:'疏散楼梯'}];
+const NOGO = [
+  ...LIFTS.map(l=>({p:R(l.x0,l.y0,l.x1,l.y1), t:'电梯井'})),
+  ...STAIRS.map(s=>({p:s.p, t:s.n})),
+  {p:R(516,200,560,250), t:'设备机房'},
+  {p:R(0,258,86,296),    t:'后勤仓储'},
+];
+
+/* ---------- 1c. 商铺分区（色块 = 商铺，名称默认显示）---------- */
+const Z = (c,n,p)=>({c,n,p});
 const FLOORS = [
  { id:'F1', label:'1F', idx:0,
    zones:[
-     {c:'teal', p:R(0,140,235,192)},                 // 左翼上沿
-     {c:'teal', p:R(0,300,235,365)},                 // 左翼下沿
-     {c:'teal', p:R(235,55,455,110)},                // 上中段
-     {c:'green',p:[[345,300],[455,205],[455,300],[400,365]]},  // 中央斜向绿化
-     {c:'lav',  p:R(455,0,645,115)},                 // 右上（餐饮）
-     {c:'pink', p:R(645,115,720,200)},
-     {c:'teal', p:R(645,200,720,300)},
-     {c:'pink', p:R(565,300,720,365)},
-     {c:'pink', p:R(235,365,340,420)},
-     {c:'pink', p:R(355,365,435,420)},
-     {c:'coral',p:R(240,265,330,300)}],
-   pois:[{k:'esc',x:436,y:35,n:'扶梯'},{k:'lift',x:468,y:35,n:'客梯'},
-         {k:'wc',x:392,y:285,n:'卫生间'},{k:'esc',x:436,y:285,n:'扶梯'},{k:'lift',x:468,y:285,n:'客梯'},
-         {k:'shop',x:300,y:82,n:'旗舰店'},{k:'shop',x:548,y:58,n:'咖啡'},
-         {k:'shop',x:682,y:160,n:'零售'},{k:'shop',x:300,y:392,n:'超市'},
-         {k:'exit',x:60,y:166,n:'北出入口'},{k:'exit',x:120,y:392,n:'西出入口'},
-         {k:'exit',x:600,y:332,n:'东出入口'},{k:'esc',x:682,y:255,n:'扶梯'}]},
+     Z('teal','优衣库 UNIQLO',      R(0,142,232,190)),
+     Z('pink','星巴克甄选',          R(2,196,90,254)),
+     Z('teal','H&M',                R(0,300,232,360)),
+     Z('green','室内绿化 · 休息谷',  R(0,366,232,416)),
+     Z('teal','Apple 授权店',       R(238,58,452,108)),
+     Z('pink','周大福珠宝',          R(238,118,452,186)),
+     Z('coral','特卖市集',           R(238,262,452,300)),
+     Z('pink','丝芙兰 SEPHORA',     R(238,306,452,360)),
+     Z('pink','名创优品',            R(238,368,340,416)),
+     Z('pink','屈臣氏',              R(350,368,432,416)),
+     Z('lav','茶颜悦色',             R(456,2,642,34)),
+     Z('lav','太二酸菜鱼',           R(598,40,642,112)),
+     Z('pink','万宁 MANNINGS',      R(668,118,716,186)),
+     Z('teal','无印良品 MUJI',      R(598,196,716,296)),
+     Z('pink','孩子王',              R(440,304,560,360))],
+   pois:[{k:'wc',x:430,y:225,n:'卫生间'},{k:'exit',x:60,y:166,n:'北出入口'},
+         {k:'exit',x:120,y:392,n:'西出入口'},{k:'exit',x:600,y:332,n:'东出入口'},
+         {k:'info',x:300,y:280,n:'服务台'}]},
 
  { id:'F2', label:'2F', idx:1,
    zones:[
-     {c:'teal', p:R(0,140,235,192)},
-     {c:'teal', p:R(0,300,235,365)},
-     {c:'teal', p:R(235,55,455,110)},
-     {c:'sage', p:[[345,300],[455,205],[455,300],[400,365]]},   // 斜向连廊平台
-     {c:'lav',  p:R(455,0,645,115)},
-     {c:'lav',  p:R(645,115,720,200)},
-     {c:'pink', p:R(645,200,720,300)},
-     {c:'teal', p:R(565,300,720,365)},
-     {c:'pink', p:R(235,365,340,420)},
-     {c:'coral',p:R(355,365,435,420)}],
-   pois:[{k:'wc',x:392,y:285,n:'卫生间'},{k:'esc',x:436,y:285,n:'扶梯'},{k:'lift',x:468,y:285,n:'客梯'},
-         {k:'wc',x:392,y:35,n:'卫生间'},{k:'esc',x:436,y:35,n:'扶梯'},{k:'lift',x:468,y:35,n:'客梯'},
-         {k:'shop',x:300,y:82,n:'影院'},
-         {k:'shop',x:548,y:58,n:'餐厅'},{k:'shop',x:682,y:160,n:'咖啡'},
-         {k:'esc',x:682,y:255,n:'扶梯'},{k:'lift',x:600,y:332,n:'货梯'}]},
+     Z('teal','ZARA',               R(0,142,232,190)),
+     Z('pink','喜茶 HEYTEA',        R(2,196,90,254)),
+     Z('teal','URBAN REVIVO',      R(0,300,232,360)),
+     Z('sage','观景连廊平台',        R(0,366,232,416)),
+     Z('teal','万象影城 CGV',       R(238,58,452,108)),
+     Z('pink','CHOCO1ATE',          R(238,118,452,186)),
+     Z('pink','西贝莜面村',          R(238,262,452,300)),
+     Z('lav','探鱼烤鱼',             R(238,306,452,360)),
+     Z('pink','KKV 潮玩',           R(238,368,340,416)),
+     Z('coral','快闪中庭',           R(350,368,432,416)),
+     Z('lav','星巴克咖啡',           R(456,2,642,34)),
+     Z('lav','南京大牌档',           R(598,40,642,112)),
+     Z('pink','TGP 生活馆',         R(668,118,716,186)),
+     Z('teal','Nike Rise 运动馆',   R(598,196,716,296)),
+     Z('pink','童泰母婴',            R(440,304,560,360))],
+   pois:[{k:'wc',x:430,y:225,n:'卫生间'},{k:'info',x:300,y:280,n:'服务台'},
+         {k:'shop',x:300,y:82,n:'影院售票'},{k:'lift',x:529,y:144,n:'客梯'}]},
 
  { id:'F3', label:'3F', idx:2,
    zones:[
-     {c:'teal', p:R(0,140,235,192)},
-     {c:'green',p:R(0,300,120,365)},
-     {c:'teal', p:R(120,300,235,365)},
-     {c:'teal', p:R(235,55,455,110)},
-     {c:'sage', p:[[345,300],[455,205],[455,300],[400,365]]},
-     {c:'teal', p:R(455,0,645,115)},                   // 右上大色块
-     {c:'pink', p:R(645,115,720,200)},
-     {c:'lav',  p:R(645,200,720,300)},
-     {c:'pink', p:R(565,300,720,365)},
-     {c:'pink', p:R(235,365,340,420)},{c:'pink',p:R(355,365,435,420)}],
-   pois:[{k:'wc',x:392,y:285,n:'卫生间'},{k:'esc',x:436,y:285,n:'扶梯'},{k:'lift',x:468,y:285,n:'客梯'},
-         {k:'wc',x:392,y:35,n:'卫生间'},{k:'esc',x:436,y:35,n:'扶梯'},{k:'lift',x:468,y:35,n:'客梯'},
-         {k:'shop',x:300,y:82,n:'影院'},{k:'shop',x:548,y:58,n:'自助餐'},
-         {k:'shop',x:682,y:160,n:'餐厅'},{k:'esc',x:682,y:255,n:'扶梯'}]}
+     Z('teal','Hush Puppies 服饰',  R(0,142,232,190)),
+     Z('green','屋顶花园',           R(2,196,90,254)),
+     Z('teal','GAP Kids',           R(0,300,232,360)),
+     Z('green','屋顶草坪 · 露营区',  R(0,366,232,416)),
+     Z('teal','海底捞火锅',           R(238,58,452,108)),
+     Z('lav','巴奴毛肚火锅',          R(238,118,452,186)),
+     Z('lav','眉州东坡',             R(238,262,452,300)),
+     Z('sage','空中连廊',            R(238,306,452,360)),
+     Z('pink','西西弗书店',           R(238,368,340,416)),
+     Z('coral','亲子乐园',            R(350,368,432,416)),
+     Z('lav','美食广场 A 区',         R(456,2,642,34)),
+     Z('lav','美食广场 B 区',         R(598,40,642,112)),
+     Z('pink','奈雪的茶',            R(668,118,716,186)),
+     Z('teal','外婆家',              R(598,196,716,296)),
+     Z('pink','太丰卤味',            R(440,304,560,360))],
+   pois:[{k:'wc',x:430,y:225,n:'卫生间'},{k:'info',x:300,y:280,n:'服务台'},
+         {k:'shop',x:300,y:82,n:'火锅等位'},{k:'lift',x:529,y:144,n:'客梯'}]}
 ];
 const byIdx = i => FLOORS[i];
 
 const C = {teal:'#bfe3e0',lav:'#d9d2f0',sage:'#cfe6c4',pink:'#f6d3e4',green:'#a9d67f',
            coral:'#f6b8ac',slab:'#eef1f5',core:'#c8d1dc',hole:'#f8fafc',
+           nogo:'#b9c3d0',nogo2:'#8d99ab',esc:'#7f8ea3',lift:'#c3cbd8',
            path:'#ff5a4d',link:'#3f7bff',a:'#ff4d4f',b:'#2fd07a'};
 const hidden = new Set();
 
@@ -239,14 +276,26 @@ const bb = poly=>{
   return [x0,y0,x1,y1];
 };
 const inBB=(x,y,b)=>x>=b[0]&&y>=b[1]&&x<=b[2]&&y<=b[3];
-const HOLES_BB = HOLES.map(bb);
-const CORE_BB = bb([[CORE[0],CORE[1]],[CORE[2],CORE[3]]]);
+const HOLES_BB = HOLES.map(bb), ATRIUM_BB = ATRIUM.map(bb), WELLS_BB = WELLS.map(bb);
+const NOGO_BB = NOGO.map(n=>({...n, b:bb(n.p)}));
 const inHole=(x,y)=>HOLES_BB.some(b=>inBB(x,y,b)) && HOLES.some(h=>inPoly(x,y,h));
-const inCore=(x,y)=>inBB(x,y,CORE_BB);
-function walkable(x,y){ return inPoly(x,y,SHAPE) && !inHole(x,y); }
+const inAtrium=(x,y)=>ATRIUM_BB.some(b=>inBB(x,y,b)) && ATRIUM.some(h=>inPoly(x,y,h));
+const inWell=(x,y)=>WELLS_BB.some(b=>inBB(x,y,b)) && WELLS.some(h=>inPoly(x,y,h));
+const inNogo=(x,y)=>NOGO_BB.some(n=>inBB(x,y,n.b)&&inPoly(x,y,n.p));
+const nogoAt=(x,y)=>NOGO_BB.find(n=>inBB(x,y,n.b)&&inPoly(x,y,n.p));
+function zoneAt(x,y,fi){
+  return FLOORS[fi].zones.find(z=>{
+    const b=z.bb||(z.bb=bb(z.p));
+    return inBB(x,y,b)&&inPoly(x,y,z.p);
+  })||null;
+}
+/* 同一楼层绝大部分区域可通行：轮廓内即可走，仅扣除中庭洞口、
+   扶梯井开口、电梯井道、疏散楼梯与设备机房。 */
+function walkable(x,y){ return inPoly(x,y,SHAPE) && !inHole(x,y) && !inNogo(x,y); }
 
 /* ---------- 3. 导航网格 + A* ---------- */
 const CELL=10, GX0=0, GX1=720, GY0=0, GY1=420;
+const ESC_COST = 110, LIFT_COST = 430;   // 扶梯更快，电梯留给无障碍/大件
 const floors=[];
 function buildGrid(){
   const key=(x,y)=>x+'_'+y;
@@ -264,7 +313,7 @@ function buildGrid(){
       const m=floors[fi].map.get(key(n.gx+dx*CELL,n.gy+dy*CELL));
       if(!m) continue;
       if(dx&&dy && !(floors[fi].map.has(key(n.gx+dx*CELL,n.gy))&&floors[fi].map.has(key(n.gx,n.gy+dy*CELL)))) continue;
-      const pen = inZoneAt(m.gx,m.gy,fi)?1.7:1;      // 优先走公共通道
+      const pen = inZoneAt(m.gx,m.gy,fi)?1.3:1;       // 优先走公共通道
       n.links.push({to:m,c:CELL*(dx&&dy?1.42:1)*pen});
     }
   }
@@ -279,18 +328,19 @@ function buildGrid(){
     return best;
   };
   for(let fi=0;fi<2;fi++){
-    for(const e of ESCS){                            // 扶梯：跨 1 层
-      const cx=(e.x0+e.x1)/2;
-      for(const sy of [e.y0,e.y1]){
-        const a=near(fi,cx,sy), b=near(fi+1,cx,sy);
-        if(a&&b){a.links.push({to:b,c:170,v:{type:'esc',from:fi,to:fi+1}});
-                 b.links.push({to:a,c:170,v:{type:'esc',from:fi+1,to:fi}});}
-      }
+    /* 电动扶梯：上下落客平台固定（yb 在下层、yt 在上层），
+       上行梯只允许 fi→fi+1，下行梯只允许 fi+1→fi，与真实运营方向一致。 */
+    for(const e of ESCS){
+      if(e.g!==fi) continue;
+      const lo=near(fi,  e.cx, e.yb-10), hi=near(fi+1, e.cx, e.yt+10);
+      if(!lo||!hi) continue;
+      if(e.up) lo.links.push({to:hi,c:ESC_COST,v:{type:'esc',from:fi,to:fi+1,esc:e}});
+      else     hi.links.push({to:lo,c:ESC_COST,v:{type:'esc',from:fi+1,to:fi,esc:e}});
     }
-    for(const l of LIFTS){                           // 电梯
-      const a=near(fi,l.x,l.y), b=near(fi+1,l.x,l.y);
-      if(a&&b){a.links.push({to:b,c:260,v:{type:'lift',from:fi,to:fi+1}});
-               b.links.push({to:a,c:260,v:{type:'lift',from:fi+1,to:fi}});}
+    for(const l of LIFTS){                           // 客梯：通高井道，双向
+      const a=near(fi,l.cx,l.cy), b=near(fi+1,l.cx,l.cy);
+      if(a&&b){a.links.push({to:b,c:LIFT_COST,v:{type:'lift',from:fi,to:fi+1,lift:l}});
+               b.links.push({to:a,c:LIFT_COST,v:{type:'lift',from:fi+1,to:fi,lift:l}});}
     }
   }
 }
@@ -316,7 +366,7 @@ Heap.prototype.pop=function(){const a=this.a,top=a[0],last=a.pop();
     if(m===i)break;const t=a[m];a[m]=a[i];a[i]=t;i=m;}}return top;};
 function astar(s,t){
   const g=new Map([[s,0]]),prev=new Map(),done=new Set(),h=new Heap();
-  const est=n=>Math.hypot(n.gx-t.gx,n.gy-t.gy)+Math.abs(n.fi-t.fi)*170;
+  const est=n=>Math.hypot(n.gx-t.gx,n.gy-t.gy)+Math.abs(n.fi-t.fi)*ESC_COST;
   h.push({n:s,f:est(s)});
   while(h.a.length){
     const cur=h.pop().n;
@@ -351,23 +401,39 @@ function makeRoute(a,b){
   const na=snapNode(a.x,a.y,a.fi), nb=snapNode(b.x,b.y,b.fi);
   if(!na||!nb)return null;
   const path=astar(na,nb); if(!path)return null;
-  // 按楼层分段简化，避免把跨层中间节点（2F 落点）合并掉
-  const seg=[]; let cur=[];
-  for(const n of path){
-    if(cur.length&&cur[cur.length-1][2]!==n.fi){seg.push(cur);cur=[];}
-    cur.push([n.gx,n.gy,n.fi]);
-  }
-  if(cur.length) seg.push(cur);
-  const line=[[a.x,a.y,a.fi]];
-  for(const g of seg) line.push(...simplify(g,6));
-  line.push([b.x,b.y,b.fi]);
-  let dist=0,flr=0,vtype='esc';
+  /* 同层节点归为一段，段与段之间由竖向交通（扶梯 / 电梯）衔接。
+     分段后再逐段抽稀，避免跨层中间落点被 Douglas-Peucker 合并掉。 */
+  const segs=[], ways=[];
+  let cur=[[path[0].gx,path[0].gy,path[0].fi]];
   for(let i=1;i<path.length;i++){
-    const e=path[i-1].links.find(l=>l.to===path[i]);
-    if(e&&e.v){flr++;vtype=e.v.type;}
+    const n=path[i], p=path[i-1], link=p.links.find(l=>l.to===n);
+    if(link&&link.v){ segs.push(cur); ways.push(link.v); cur=[[n.gx,n.gy,n.fi]]; }
+    else cur.push([n.gx,n.gy,n.fi]);
   }
+  segs.push(cur);
+  const line=[[a.x,a.y,a.fi]];
+  for(let s=0;s<segs.length;s++){
+    line.push(...simplify(segs[s],6));
+    if(s<ways.length) line.push(...verticalWaypoints(ways[s]));
+  }
+  line.push([b.x,b.y,b.fi]);
+  for(let i=line.length-1;i>0;i--)
+    if(Math.hypot(line[i][0]-line[i-1][0],line[i][1]-line[i-1][1])<1.5) line.splice(i,1);
+  let dist=0;
   for(let i=1;i<line.length;i++) dist+=Math.hypot(line[i][0]-line[i-1][0],line[i][1]-line[i-1][1]);
-  return {line,dist,flr,vtype,meters:dist*MPP,minutes:dist*MPP/72};
+  const vtype = ways.some(w=>w.type==='lift') ? 'lift' : 'esc';
+  return {line,dist,flr:ways.length,vtype,ways,meters:dist*MPP,minutes:dist*MPP/72};
+}
+/* 跨层折点：扶梯沿 30° 斜面连续插值（fi 也随之变化），电梯沿井道竖直上升 */
+function verticalWaypoints(v){
+  const up = v.to>v.from;
+  if(v.type==='esc'){
+    const e=v.esc, yA=up?e.yb:e.yt, yB=up?e.yt:e.yb, out=[];
+    for(let i=1;i<4;i++){ const t=i/4; out.push([e.cx, yA+(yB-yA)*t, v.from+(v.to-v.from)*t]); }
+    return out;
+  }
+  const l=v.lift;
+  return [[l.cx,l.cy,v.from],[l.cx,l.cy,v.to]];
 }
 
 /* ---------- 4. 轨道相机（yaw 左右转 + pitch 上下转，可停在任意视角） ---------- */
@@ -476,11 +542,19 @@ function drawFloor(fi,dim){
   const bot=SHAPE.map(p=>proj(p[0],p[1],z0));
   const cOut=centroid(SHAPE);
 
-  if(dim){                                            // 非当前层：只画轮廓，避免叠层浑浊
-    ctx.globalAlpha=.55;
+  const holes = slabHoles(fi);                         // 本层楼板的实际开洞
+  if(dim){                                            // 非当前层：轮廓 + 商铺名，保持可读
+    ctx.globalAlpha=.5;
     poly(top,null,'#33405a',1);
     poly(bot,null,'#222c3e',1);
-    for(const h of HOLES) poly(h.map(q=>proj(q[0],q[1],zt)),null,'#2a3547',1);
+    for(const h of holes) poly(h.map(q=>proj(q[0],q[1],zt)),null,'#2a3547',1);
+    ctx.globalAlpha=.85;
+    if(!hidden.has('shop')&&!hidden.has('names')) for(const zn of f.zones){
+      const c=centroid(zn.p);
+      ctx.globalAlpha=.4; label2d(zn.n, proj(c[0],c[1],zt+ZONE_H), .5, '#8f9bb0'); ctx.globalAlpha=.85;
+    }
+    ctx.globalAlpha=.3;
+    if(!hidden.has('esc')) for(const e of ESCS) if(e.g===fi) drawEsc(e, fi, z0, zt);
     ctx.globalAlpha=1;
     floorLabel(fi); ctx.restore(); return;
   }
@@ -494,8 +568,8 @@ function drawFloor(fi,dim){
     const light = -.05 + n[1]*.12 + n[0]*-.06;
     poly([top[i],top[(i+1)%SHAPE.length],bot[(i+1)%SHAPE.length],bot[i]], shade(C.slab,light),'rgba(150,160,175,.5)',.6);
   }
-  // 中庭洞口：洞壁 + 顶面
-  for(const h of HOLES){
+  // 洞口（中庭 / 扶梯井）：洞壁 + 顶面
+  for(const h of holes){
     const ht=h.map(p=>proj(p[0],p[1],zt)), hb=h.map(p=>proj(p[0],p[1],z0));
     const cH=centroid(h);
     for(let i=0;i<h.length;i++){
@@ -508,17 +582,44 @@ function drawFloor(fi,dim){
   // 顶面
   if(facing([0,0,1])) poly(top, C.slab, '#b7c1ce',1);
   // 洞口在顶面上的“掏空”
-  if(facing([0,0,1])) for(const h of HOLES){
+  if(facing([0,0,1])) for(const h of holes){
     poly(h.map(p=>proj(p[0],p[1],zt+.5)), C.hole, '#c0c9d4',1);
   }
 
-  // 体块（分区）
+  /* 不可通行标记：中庭 / 扶梯井 / 电梯厅 / 疏散楼梯 / 设备机房 */
+  if(!hidden.has('nogo')){
+    if(facing([0,0,1])){
+      for(const h of ATRIUM) hatch(h.map(p=>proj(p[0],p[1],zt+.9)), C.nogo2, 'rgba(141,153,171,.55)', 9);
+      // 仅在本层楼板真正开洞的井道处标空洞；落客层画平台
+      for(const w of holes) if(WELLS.indexOf(w)>=0)
+        hatch(w.map(p=>proj(p[0],p[1],zt+.9)), '#9fb0c4', 'rgba(120,140,165,.6)', 6);
+    }
+    for(const n of NOGO_BB){
+      const t=n.p.map(p=>proj(p[0],p[1],zt+3.5)), b2=n.p.map(p=>proj(p[0],p[1],zt+.6));
+      const cz=centroid(n.p);
+      for(let i=0;i<n.p.length;i++){
+        const a=n.p[i], b=n.p[(i+1)%n.p.length];
+        const v=planNormal(a,b,cz,true);
+        if(!facing([v[0],v[1],0])) continue;
+        poly([t[i],t[(i+1)%n.p.length],b2[(i+1)%n.p.length],b2[i]], shade(C.nogo,-.12+v[0]*.08));
+      }
+      if(facing([0,0,1])){
+        poly(t, C.nogo, 'rgba(255,255,255,.55)',1);
+        hatch(t, C.nogo2, 'rgba(96,110,130,.75)', 6);
+        const c=proj(cz[0],cz[1],zt+4.5);
+        label2d(n.t, c, .58, '#3d4757');
+      }
+    }
+  }
+
+  // 体块（商铺）
   const zs=f.zones.map(zn=>{
     const c=centroid(zn.p);
     return {zn, d:rotV(c[0]-CX,c[1]-CY,zt+ZONE_H-CZ0)[2]};
   }).sort((a,b)=>a.d-b.d);
+  const labels=[];
   for(const {zn} of zs){
-    if(hidden.has(zn.c)) continue;
+    if(hidden.has('shop')) continue;
     const base=zn.c, col=C[base];
     const t=zn.p.map(p=>proj(p[0],p[1],zt+ZONE_H));
     const b2=zn.p.map(p=>proj(p[0],p[1],zt+.6));
@@ -529,43 +630,19 @@ function drawFloor(fi,dim){
       if(!facing([n[0],n[1],0])) continue;
       poly([t[i],t[(i+1)%zn.p.length],b2[(i+1)%zn.p.length],b2[i]], shade(col,-.15+n[0]*.09+n[1]*-.05));
     }
-    if(facing([0,0,1])) poly(t, col, 'rgba(255,255,255,.6)',1);
-  }
-  // 交通核平台
-  if(!hidden.has('core')){
-    const cp=R(CORE[0],CORE[1],CORE[2],CORE[3]);
-    const t=cp.map(p=>proj(p[0],p[1],zt+3));
-    poly(t,C.core,'rgba(255,255,255,.5)',1);
-  }
-  // 扶梯：本层→上层的坡道
-  for(const e of ESCS){
-    if(fi<2 && !hidden.has('esc')){
-      const q=[[e.x0,e.y0,zt+4],[e.x1,e.y0,zt+4],[e.x1,e.y1,(fi+1)*FH+SLAB_T+4],[e.x0,e.y1,(fi+1)*FH+SLAB_T+4]];
-      poly(q.map(p=>proj(p[0],p[1],p[2])),'#a7b3c1','#7d8999',1);
-      ctx.strokeStyle='rgba(255,255,255,.6)';ctx.lineWidth=1;
-      for(let i=1;i<12;i++){
-        const t=i/12, y=e.y0+(e.y1-e.y0)*t, z=zt+4+((fi+1)*FH+SLAB_T-z0-SLAB_T)*t;
-        const a=proj(e.x0,y,z), b=proj(e.x1,y,z);
-        ctx.beginPath();ctx.moveTo(a[0],a[1]);ctx.lineTo(b[0],b[1]);ctx.stroke();
-      }
+    if(facing([0,0,1]) && !hidden.has('names')){
+      labels.push({n:zn.n, c:proj(cz[0],cz[1],zt+ZONE_H+.4)});
     }
-    const r=R(e.x0,e.y0,e.x1,e.y1).map(p=>proj(p[0],p[1],zt+4.5));
-    poly(r,'#e7edf3','#8d9aaa',1);
   }
-  // 电梯井
-  if(!hidden.has('lift')) for(const l of LIFTS){
-    const r=R(l.x-14,l.y-14,l.x+14,l.y+14);
-    const h=SLAB_T+42;
-    const t=r.map(p=>proj(p[0],p[1],z0+h)), b2=r.map(p=>proj(p[0],p[1],zt));
-    const cz=[l.x,l.y];
-    for(let i=0;i<4;i++){
-      const a=r[i], b=r[(i+1)%4];
-      const n=planNormal(a,b,cz,true);
-      if(!facing([n[0],n[1],0])) continue;
-      poly([t[i],t[(i+1)%4],b2[(i+1)%4],b2[i]], shade('#dde5ee',-.1+n[0]*.1));
-    }
-    if(facing([0,0,1])) poly(t,'#eef3f8','#8d9aaa',1);
-  }
+  // 商铺名称：默认显示，按深度顺序绘制
+  for(const L of labels) label2d(L.n, L.c, 1, '#26313f');
+
+  // 电动扶梯：30° 真实斜跑 + 上下落客平台
+  if(!hidden.has('esc')) for(const e of ESCS) drawEsc(e, fi, z0, zt);
+
+  // 通高客梯井道 + 轿厢
+  if(!hidden.has('lift')) for(const l of LIFTS) drawLift(l, fi, z0, zt);
+
   // POI
   if(!hidden.has('poi')){
     const ps=f.pois.map(p=>{
@@ -577,6 +654,102 @@ function drawFloor(fi,dim){
   }
   floorLabel(fi);
   ctx.restore();
+}
+
+/* 斜向填充 = 不可通行（图面上与商铺色块明确区分） */
+function hatch(pts, fill, line, gap){
+  ctx.save();
+  ctx.beginPath();
+  for(let i=0;i<pts.length;i++) i?ctx.lineTo(pts[i][0],pts[i][1]):ctx.moveTo(pts[i][0],pts[i][1]);
+  ctx.closePath();
+  ctx.fillStyle=fill; ctx.globalAlpha=.28; ctx.fill(); ctx.globalAlpha=1;
+  ctx.clip();
+  let x0=1e9,x1=-1e9,y0=1e9,y1=-1e9;
+  for(const p of pts){x0=Math.min(x0,p[0]);x1=Math.max(x1,p[0]);y0=Math.min(y0,p[1]);y1=Math.max(y1,p[1]);}
+  ctx.strokeStyle=line; ctx.lineWidth=1;
+  const span=(x1-x0)+(y1-y0);
+  ctx.beginPath();
+  for(let k=-span;k<span;k+=gap){
+    ctx.moveTo(x0+k, y1); ctx.lineTo(x0+k+(y1-y0), y0);
+  }
+  ctx.stroke();
+  ctx.restore();
+}
+
+/* 文字标签：字号随缩放，带描边保证任何视角都能读 */
+function label2d(text, p, k, col){
+  if(p[0]<-60||p[0]>W+60||p[1]<-30||p[1]>H+30) return;
+  const fs=Math.max(7.5, Math.min(13, 10.5*k*Math.max(.55,Math.min(1.5,view.scale))));
+  ctx.save();
+  ctx.font=`600 ${fs.toFixed(1)}px system-ui,"PingFang SC","Microsoft YaHei",sans-serif`;
+  ctx.textAlign='center'; ctx.textBaseline='middle';
+  ctx.lineJoin='round'; ctx.lineWidth=Math.max(2.2, fs*.34);
+  ctx.strokeStyle='rgba(255,255,255,.82)'; ctx.strokeText(text,p[0],p[1]);
+  ctx.fillStyle=col; ctx.fillText(text,p[0],p[1]);
+  ctx.restore();
+}
+
+/* 电动扶梯：桁架 + 踏面 + 台阶线 + 扶手带，倾角 atan(FH/ESC_RUN) ≈ 30° */
+function drawEsc(e, fi, z0, zt){
+  const zLo = z0 + SLAB_T + 3, zHi = zLo + FH;         // 下层平台面 → 上层平台面
+  /* 同一井道内斜跑方向固定（yb 在下、yt 在上），up 只决定扶手带的运行方向 */
+  const yA = e.yb, yB = e.yt;
+  if(fi===e.g){
+    const zz = [zLo,zHi];
+    const truss = [[e.x0-2,yA,zz[0]-6],[e.x1+2,yA,zz[0]-6],[e.x1+2,yB,zz[1]-6],[e.x0-2,yB,zz[1]-6]];
+    poly(truss.map(p=>proj(p[0],p[1],p[2])), '#6b7688', '#4b5563',1);
+    const deck = [[e.x0,yA,zz[0]],[e.x1,yA,zz[0]],[e.x1,yB,zz[1]],[e.x0,yB,zz[1]]];
+    poly(deck.map(p=>proj(p[0],p[1],p[2])), C.esc, '#5b6675',1);
+    // 台阶线：沿斜面等距分布（真实梯路）
+    ctx.strokeStyle='rgba(255,255,255,.55)'; ctx.lineWidth=1;
+    ctx.beginPath();
+    const steps=13;
+    for(let i=1;i<steps;i++){
+      const t=i/steps, y=yA+(yB-yA)*t, z=zz[0]+(zz[1]-zz[0])*t;
+      const a=proj(e.x0,y,z), b=proj(e.x1,y,z);
+      ctx.moveTo(a[0],a[1]); ctx.lineTo(b[0],b[1]);
+    }
+    ctx.stroke();
+    // 两侧扶手带
+    ctx.strokeStyle='#39424f'; ctx.lineWidth=2.6; ctx.lineCap='round';
+    for(const x of [e.x0-1, e.x1+1]){
+      const a=proj(x,yA,zz[0]+9), b=proj(x,yB,zz[1]+9);
+      ctx.beginPath(); ctx.moveTo(a[0],a[1]); ctx.lineTo(b[0],b[1]); ctx.stroke();
+    }
+    // 运行方向箭头：上行指向 yt/上层，下行指向 yb/下层
+    const mid=proj(e.cx, (yA+yB)/2, (zLo+zHi)/2+13);
+    const tip=e.up? proj(e.cx, yB, zHi+13) : proj(e.cx, yA, zLo+13);
+    ctx.strokeStyle=e.up?'#37d07a':'#f0a63a'; ctx.lineWidth=2.4; ctx.lineCap='round';
+    ctx.beginPath(); ctx.moveTo(mid[0],mid[1]); ctx.lineTo(tip[0],tip[1]); ctx.stroke();
+    label2d(e.s, proj(e.cx, (e.yb+e.yt)/2, zLo+FH*.5+30), .7, '#2b3a52');
+  }
+  // 落客平台：紧贴井道开口外侧（下层端在 yb 以上，上层端在 yt 以下）
+  if(fi!==e.g && fi!==e.g+1) return;
+  const low = fi===e.g;
+  const land = R(e.x0-5, low? e.yb-15 : e.yt, e.x1+5, low? e.yb : e.yt+15)
+                 .map(p=>proj(p[0],p[1],zt+4));
+  poly(land, '#e7edf3', '#8d9aaa',1);
+  hatch(land, '#9fb0c4', 'rgba(120,140,165,.45)', 6);
+}
+
+/* 通高客梯：井道从本层楼板一直落到屋面，轿厢按当前层停靠 */
+function drawLift(l, fi, z0, zt){
+  const r=R(l.x0,l.y0,l.x1,l.y1);
+  const zTop = 2*FH + SLAB_T + 26;                     // 通高：越过 3F 屋面
+  const t=r.map(p=>proj(p[0],p[1],zTop)), b2=r.map(p=>proj(p[0],p[1],zt));
+  const cz=[l.cx,l.cy];
+  for(let i=0;i<4;i++){
+    const a=r[i], b=r[(i+1)%4];
+    const n=planNormal(a,b,cz,true);
+    if(!facing([n[0],n[1],0])) continue;
+    poly([t[i],t[(i+1)%4],b2[(i+1)%4],b2[i]], shade(C.lift,-.1+n[0]*.1),'rgba(255,255,255,.35)',.7);
+  }
+  if(facing([0,0,1])) poly(t,'#eef3f8','#8d9aaa',1);
+  // 轿厢位置：随当前层停靠
+  const zc = fi*FH + SLAB_T + 4;
+  const cab=R(l.x0+3,l.y0+3,l.x1-3,l.y1-3).map(p=>proj(p[0],p[1],zc+22));
+  if(facing([0,0,1])) poly(cab,'#9fb0c4','#5b6675',1);
+  if(fi===view.fi) label2d(l.n, proj(l.cx, l.y0-9, zc+SLAB_T+30), .68, '#33415a');
 }
 function floorLabel(fi){
   const f=byIdx(fi);
@@ -592,7 +765,8 @@ function icon(k,x,y){
   ctx.save();ctx.translate(x,y);
   ctx.beginPath();
   if(ctx.roundRect) ctx.roundRect(-s/2,-s/2,s,s,4.5); else ctx.rect(-s/2,-s/2,s,s);
-  ctx.fillStyle={wc:'#2f7fe0',esc:'#2fa84f',lift:'#7b61d8',shop:'#2f4bd8',exit:'#2fa84f'}[k]||'#555';
+  ctx.fillStyle={wc:'#2f7fe0',esc:'#2fa84f',lift:'#7b61d8',shop:'#2f4bd8',exit:'#2fa84f',
+                 info:'#e08a2f',atag:'#8a94a6'}[k]||'#555';
   ctx.fill();
   ctx.strokeStyle='#fff';ctx.fillStyle='#fff';ctx.lineWidth=1.3;ctx.lineCap='round';ctx.lineJoin='round';
   if(k==='wc'){
@@ -615,6 +789,10 @@ function icon(k,x,y){
   }else if(k==='shop'){
     ctx.beginPath();ctx.arc(0,2.4*u,4*u,0,7);ctx.fill();
     ctx.beginPath();ctx.moveTo(0,-1.6*u);ctx.lineTo(0,-5.6*u);ctx.stroke();
+  }else if(k==='info'){
+    ctx.beginPath();ctx.arc(0,-3.4*u,1.7*u,0,7);ctx.fill();
+    ctx.beginPath();ctx.moveTo(0,-.6*u);ctx.lineTo(0,5*u);ctx.stroke();
+    ctx.beginPath();ctx.moveTo(-2.6*u,5*u);ctx.lineTo(2.6*u,5*u);ctx.stroke();
   }else if(k==='exit'){
     ctx.strokeRect(-6*u,-6*u,4.6*u,12*u);
     ctx.beginPath();ctx.arc(1.4*u,-4.2*u,1.6*u,0,7);ctx.fill();
@@ -628,7 +806,7 @@ function drawRoute(){
   ctx.save();ctx.lineJoin='round';ctx.lineCap='round';
   for(let i=1;i<L.length;i++){
     const p=L[i-1],q=L[i],cross=q[2]!==p[2];
-    const onFloor = view.mode==='3' || p[2]===view.fi || q[2]===view.fi;
+    const onFloor = view.mode==='3' || Math.round(p[2])===view.fi || Math.round(q[2])===view.fi;
     ctx.globalAlpha=onFloor?1:.18;
     ctx.strokeStyle=cross?C.link:C.path;
     ctx.lineWidth=cross?3.4:4.4;
@@ -643,7 +821,7 @@ function drawRoute(){
 function drawPin(pt,label,col){
   const z=pt.fi*FH+SLAB_T+ZONE_H;
   const base=proj(pt.x,pt.y,z);
-  const top =proj(pt.x,pt.y,z+52);
+  const top =proj(pt.x,pt.y,z+34);
   const k=Math.max(.6,Math.min(1.3,view.scale));
   ctx.save();
   ctx.fillStyle='rgba(255,255,255,.18)';
@@ -702,7 +880,7 @@ function fitView(){
   const list = view.mode==='3' ? [0,1,2] : [view.fi];
   let x0=1e9,x1=-1e9,y0=1e9,y1=-1e9;
   for(const fi of list) for(const v of SHAPE){
-    for(const z of [fi*FH, fi*FH+SLAB_T+ZONE_H+55]){
+    for(const z of [fi*FH, fi*FH+SLAB_T+ZONE_H+40]){
       const r=rotV(v[0]-CX,v[1]-CY,z-CZ0);
       x0=Math.min(x0,r[0]);x1=Math.max(x1,r[0]);y0=Math.min(y0,r[1]);y1=Math.max(y1,r[1]);
     }
@@ -831,7 +1009,14 @@ function hoverAt(sx,sy){
 }
 function pick(sx,sy){
   const h=hitFloor(sx,sy);
-  if(!h){say('这里不可通行（中庭洞口 / 建筑外 / 视角过平）');return;}
+  if(!h){
+    const w=unproj(sx,sy,view.fi);
+    const why = !w?'视角过平，请抬高一点'
+      : !inPoly(w[0],w[1],SHAPE)?'这里在建筑外'
+      : inAtrium(w[0],w[1])?'中庭洞口 · 不可通行'
+      : inWell(w[0],w[1])?'电动扶梯井道 · 不可通行'
+      : (nogoAt(w[0],w[1])||{t:'设备区'})+' · 不可通行';
+    say(why);return;}
   if(h.fi!==view.fi) setFloor(h.fi,true);
   const nx=Math.round(h.x/CELL)*CELL, ny=Math.round(h.y/CELL)*CELL;
   const pt={x:nx,y:ny,fi:h.fi,name:nearestPOI(nx,ny,h.fi)||placeName(nx,ny,h.fi)};
@@ -843,14 +1028,18 @@ function pick(sx,sy){
 }
 function nearestPOI(x,y,fi){
   let best=null,bd=1e9;
-  for(const p of FLOORS[fi].pois){const d=Math.hypot(p.x-x,p.y-y);if(d<bd){bd=d;best=p;}}
+  for(const p of FLOORS[fi].pois){
+    const d=Math.hypot(p.x-x,p.y-y); if(d<bd){bd=d;best=p;}
+  }
   return (best&&bd<26)?best.n:null;
 }
 function placeName(x,y,fi){
-  if(inCore(x,y)) return FLOORS[fi].label+' 交通核';
-  const z=FLOORS[fi].zones.find(v=>inBB(x,y,v.bb||(v.bb=bb(v.p)))&&inPoly(x,y,v.p));
-  const nm={teal:'主力店',lav:'餐饮区',sage:'连廊平台',pink:'商铺',green:'绿化中庭',coral:'特卖区'}[z&&z.c];
-  return nm? FLOORS[fi].label+' '+nm : FLOORS[fi].label+' 通道';
+  const ng=nogoAt(x,y);
+  if(ng) return FLOORS[fi].label+' '+ng.t+'（不可通行）';
+  if(inWell(x,y))  return FLOORS[fi].label+' 扶梯井（不可通行）';
+  if(inAtrium(x,y))return FLOORS[fi].label+' 中庭（不可通行）';
+  const z=zoneAt(x,y,fi);
+  return z? FLOORS[fi].label+' '+z.n : FLOORS[fi].label+' 公共通道';
 }
 function compute(){
   const r=makeRoute(A,B);
@@ -863,13 +1052,16 @@ function compute(){
   document.getElementById('rTime').textContent=Math.max(1,Math.round(r.minutes))+' 分钟';
   document.getElementById('rFlr').textContent=r.flr? r.flr+' 次 · '+(r.vtype==='lift'?'电梯':'扶梯') : '0 次 · 同层';
   const ul=document.getElementById('steps');ul.innerHTML='';
-  const segs=[];let cur={fi:A.fi,d:0};
+  /* 按“整层”切段：斜跑上的连续楼层值（如 1.25）归属其起点所在层 */
+  const segs=[];let cur={fi:Math.round(r.line[0][2]),d:0},wi=0;
   for(let i=1;i<r.line.length;i++){
     const p=r.line[i-1],q=r.line[i];
-    if(p[2]!==q[2]){
+    if(Math.round(q[2])!==Math.round(p[2])){
       if(cur.d>10) segs.push({type:'w',fi:cur.fi,d:cur.d});
-      segs.push({type:'v',from:byIdx(p[2]).label,to:byIdx(q[2]).label,up:q[2]>p[2]});
-      cur={fi:q[2],d:0};
+      const w=r.ways[wi++]||{}, up=q[2]>p[2];
+      segs.push({type:'v',from:byIdx(Math.round(p[2])).label,to:byIdx(Math.round(q[2])).label,
+                 up,kind:w.type,who:w.type==='lift'?(w.lift&&w.lift.n):(w.esc&&w.esc.n)});
+      cur={fi:Math.round(q[2]),d:0};
     }else cur.d+=Math.hypot(q[0]-p[0],q[1]-p[1]);
   }
   if(cur.d>10) segs.push({type:'w',fi:cur.fi,d:cur.d});
@@ -878,7 +1070,7 @@ function compute(){
   for(const s of segs){
     const li=document.createElement('li');
     if(s.type==='w') li.innerHTML=`<u>${n++}</u><em>${byIdx(s.fi).label} 步行 ${(s.d*MPP).toFixed(0)} m</em>`;
-    else{li.className='v';li.innerHTML=`<u>${s.up?'⇧':'⇩'}</u><em>${s.up?'上':'下'}楼 ${s.from} → ${s.to}</em>`;}
+    else{li.className='v';li.innerHTML=`<u>${s.up?'⇧':'⇩'}</u><em>${s.up?'乘电动扶梯上行':'乘电动扶梯下行'} ${s.from} → ${s.to}${s.kind==='lift'?' · 改乘'+(s.who||'客梯'):''}</em>`;}
     ul.appendChild(li);
   }
   if(!segs.some(s=>s.type==='v')){
@@ -994,9 +1186,11 @@ cv.addEventListener('dblclick',()=>{fitView();draw();});
 
 const lg=document.getElementById('legend');
 lg.innerHTML='<div class="t">图层<s>▾</s></div>'+
- [['teal','主力店'],['lav','餐饮'],['sage','连廊'],['pink','商铺'],['green','绿化'],
-  ['core','交通核'],['esc','扶梯'],['lift','电梯'],['poi','POI 图标']]
- .map(([k,n])=>`<div class="row" data-k="${k}"><i style="background:${C[k]||'#2f7fe0'}"></i>${n}</div>`).join('');
+ [['shop','商铺色块'],['nogo','不可通行'],['esc','电动扶梯'],['lift','客梯'],['poi','POI 图标']]
+ .map(([k,n])=>`<div class="row" data-k="${k}"><i style="background:${
+   k==='nogo'?'repeating-linear-gradient(45deg,#b9c3d0 0 3px,#7d8a9c 3px 5px)':
+   k==='shop'?'linear-gradient(90deg,#bfe3e0,#f6d3e4)':C[k]||'#7f8ea3'}"></i>${n}</div>`).join('')+
+ '<div class="row" data-k="names"><i style="background:#26313f"></i>商铺名称</div>';
 lg.onclick=e=>{
   if(e.target.closest('.t')){lg.classList.toggle('min');return;}
   const r=e.target.closest('.row');if(!r)return;
@@ -1007,14 +1201,14 @@ lg.onclick=e=>{
 };
 if(innerWidth<560) lg.classList.add('min');
 
-/* ---------- 10. 启动：默认 1F ---------- */
+/* ---------- 10. 启动：默认 1F + 3D ---------- */
 resize();
 view.mode='3'; view.yaw=HOME.yaw; view.pitch=HOME.pitch;
 cam3.yaw=HOME.yaw; cam3.pitch=HOME.pitch;
 [...document.getElementById('dseg').children].forEach(x=>x.classList.toggle('on',x.dataset.m==='3'));
 setFloor(0,true);
-A={x:250,y:390,fi:0,name:'1F 中庭入口'};      // 对应参考图 A 点位置
-B={x:470,y:70, fi:2,name:'3F 餐饮区'};        // 对应参考图 B 点位置
+A={x:60,y:166,fi:0,name:placeName(60,166,0)};
+B={x:620,y:70,fi:2,name:placeName(620,70,2)};
 compute();
 fitView();
 draw();
