@@ -550,7 +550,8 @@ function drawFloor(fi,dim){
     for(const h of holes) poly(h.map(q=>proj(q[0],q[1],zt)),null,'#2a3547',1);
     ctx.globalAlpha=.85;
     if(!hidden.has('shop')&&!hidden.has('names')) for(const zn of f.zones){
-      const c=centroid(zn.p);
+      const c=centroid(zn.p), t=zn.p.map(p=>proj(p[0],p[1],zt+ZONE_H));
+      if(!bigEnough(t, 62, 20)) continue;
       ctx.globalAlpha=.4; label2d(zn.n, proj(c[0],c[1],zt+ZONE_H), .5, '#8f9bb0'); ctx.globalAlpha=.85;
     }
     ctx.globalAlpha=.3;
@@ -606,8 +607,7 @@ function drawFloor(fi,dim){
       if(facing([0,0,1])){
         poly(t, C.nogo, 'rgba(255,255,255,.55)',1);
         hatch(t, C.nogo2, 'rgba(96,110,130,.75)', 6);
-        const c=proj(cz[0],cz[1],zt+4.5);
-        label2d(n.t, c, .58, '#3d4757');
+        if(bigEnough(t, 40, 16)) label2d(n.t, proj(cz[0],cz[1],zt+4.5), .58, '#3d4757');
       }
     }
   }
@@ -630,7 +630,7 @@ function drawFloor(fi,dim){
       if(!facing([n[0],n[1],0])) continue;
       poly([t[i],t[(i+1)%zn.p.length],b2[(i+1)%zn.p.length],b2[i]], shade(col,-.15+n[0]*.09+n[1]*-.05));
     }
-    if(facing([0,0,1]) && !hidden.has('names')){
+    if(facing([0,0,1]) && !hidden.has('names') && bigEnough(t, 46, 15)){
       labels.push({n:zn.n, c:proj(cz[0],cz[1],zt+ZONE_H+.4)});
     }
   }
@@ -676,6 +676,12 @@ function hatch(pts, fill, line, gap){
   ctx.restore();
 }
 
+/* 标签在屏幕上太小时省略，避免密集区糊成一团 */
+function bigEnough(pts, minW, minH){
+  let x0=1e9,x1=-1e9,y0=1e9,y1=-1e9;
+  for(const p of pts){x0=Math.min(x0,p[0]);x1=Math.max(x1,p[0]);y0=Math.min(y0,p[1]);y1=Math.max(y1,p[1]);}
+  return (x1-x0)>=minW && (y1-y0)>=minH;
+}
 /* 文字标签：字号随缩放，带描边保证任何视角都能读 */
 function label2d(text, p, k, col){
   if(p[0]<-60||p[0]>W+60||p[1]<-30||p[1]>H+30) return;
@@ -721,7 +727,8 @@ function drawEsc(e, fi, z0, zt){
     const tip=e.up? proj(e.cx, yB, zHi+13) : proj(e.cx, yA, zLo+13);
     ctx.strokeStyle=e.up?'#37d07a':'#f0a63a'; ctx.lineWidth=2.4; ctx.lineCap='round';
     ctx.beginPath(); ctx.moveTo(mid[0],mid[1]); ctx.lineTo(tip[0],tip[1]); ctx.stroke();
-    label2d(e.s, proj(e.cx, (e.yb+e.yt)/2, zLo+FH*.5+30), .7, '#2b3a52');
+    if(bigEnough([proj(e.x0,e.yb,zLo),proj(e.x1,e.yt,zHi)], 34, 22))
+      label2d(e.s, proj(e.cx, (e.yb+e.yt)/2, zLo+FH*.5+30), .7, '#2b3a52');
   }
   // 落客平台：紧贴井道开口外侧（下层端在 yb 以上，上层端在 yt 以下）
   if(fi!==e.g && fi!==e.g+1) return;
@@ -749,7 +756,7 @@ function drawLift(l, fi, z0, zt){
   const zc = fi*FH + SLAB_T + 4;
   const cab=R(l.x0+3,l.y0+3,l.x1-3,l.y1-3).map(p=>proj(p[0],p[1],zc+22));
   if(facing([0,0,1])) poly(cab,'#9fb0c4','#5b6675',1);
-  if(fi===view.fi) label2d(l.n, proj(l.cx, l.y0-9, zc+SLAB_T+30), .68, '#33415a');
+  if(fi===view.fi && bigEnough(t, 30, 14)) label2d(l.n, proj(l.cx, l.y0-9, zc+SLAB_T+30), .68, '#33415a');
 }
 function floorLabel(fi){
   const f=byIdx(fi);
